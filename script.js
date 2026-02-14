@@ -1,16 +1,20 @@
 let tg = window.Telegram.WebApp;
 tg.expand();
 
-// Глобальные переменные
+// ============ КОНФИГУРАЦИЯ ============
+const REQUIRED_CHANNEL = "@SQUIIDGAMES_CHANNEL"; // КАНАЛ АТЫН ӨЗГӨРТҮҢҮЗ!
+
+// ============ ГЛОБАЛДЫК ӨЗГӨРМӨЛӨР ============
 let userData = {
     id: tg.initDataUnsafe?.user?.id || 0,
     username: tg.initDataUnsafe?.user?.username || 'player',
-    balance: 5000,
-    stars: 0,
+    balance: 5000,        // Баланс МОНЕТА менен
     premium: 0,
-    lastBonus: {}
+    lastBonus: {},
+    checkedChannel: false
 };
 
+// Оюндар үчүн өзгөрмөлөр
 let crashGame = {
     active: false,
     multiplier: 1.00,
@@ -21,23 +25,29 @@ let crashGame = {
     roundTimer: 10
 };
 
-let tournament = {
-    players: [],
-    active: false
+let cardsGame = {
+    active: false,
+    deck: [],
+    playerCards: [],
+    opponentCards: [],
+    tableCards: [],
+    trump: null,
+    bet: 0
 };
 
-// Инициализация
+let tournament = {
+    players: []
+};
+
+// ============ БАШТАЛКЫ ИНИЦИАЛИЗАЦИЯ ============
 document.addEventListener('DOMContentLoaded', function() {
     loadUserData();
     updateBalance();
     startCrashGame();
     loadTournamentPlayers();
-    
-    // Автоматическая покупка звезд каждую минуту
-    setInterval(autoBuyStars, 60000);
 });
 
-// Telegram API
+// ============ Telegram API ============
 function sendToBot(action, data) {
     tg.sendData(JSON.stringify({
         action: action,
@@ -45,51 +55,77 @@ function sendToBot(action, data) {
     }));
 }
 
-// Загрузка данных пользователя
+// ============ КОЛДОНУУЧУ МААЛЫМАТТАРЫ ============
 function loadUserData() {
-    // Здесь должен быть запрос к боту через Telegram API
     let saved = localStorage.getItem('userData');
     if(saved) {
-        userData = JSON.parse(saved);
+        try {
+            userData = JSON.parse(saved);
+        } catch(e) {}
     }
     updateBalance();
 }
 
-// Обновление баланса
+function saveUserData() {
+    localStorage.setItem('userData', JSON.stringify(userData));
+}
+
 function updateBalance() {
-    document.getElementById('userBalance').textContent = userData.balance;
-    document.getElementById('userStars').textContent = userData.stars;
+    let balanceSpan = document.getElementById('userBalance');
+    if(balanceSpan) balanceSpan.textContent = userData.balance;
 }
 
-// Табы
+// ============ ТАБДЫ АЛМАШТЫРУУ ============
 function showTab(tabName) {
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    // Бардык табтарды жашыруу
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
     
-    document.querySelector(`[onclick="showTab('${tabName}')"]`).classList.add('active');
-    document.getElementById(tabName + 'Tab').classList.add('active');
+    // Бардык кнопкалардын активдүүлүгүн алуу
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    // Тандалган табты көрсөтүү
+    let selectedTab = document.getElementById(tabName + 'Tab');
+    if(selectedTab) selectedTab.classList.add('active');
+    
+    // Тандалган кнопканы активдештирүү
+    let selectedBtn = document.querySelector(`[onclick="showTab('${tabName}')"]`);
+    if(selectedBtn) selectedBtn.classList.add('active');
 }
 
-// Бонус система
+// ============ БОНУС СИСТЕМАСЫ ============
+async function checkChannelSubscription() {
+    try {
+        tg.sendData(JSON.stringify({
+            action: 'check_channel',
+            channel: REQUIRED_CHANNEL
+        }));
+    } catch(e) {
+        console.log(e);
+    }
+}
+
 function claimBonus(type, amount) {
     let today = new Date().toDateString();
     
+    // Бүгүн бонус алдыбы?
     if(userData.lastBonus[type] === today) {
         tg.showAlert('❌ Бонус уже получен сегодня!');
         return;
     }
     
-    // Проверка подписки
-    if(type === 'premium1' && userData.premium < 1) {
-        tg.showAlert('❌ Требуется Premium 1!');
+    // Каналды текшерүү (биринчи жолу)
+    if(!userData.checkedChannel) {
+        checkChannelSubscription();
+        userData.checkedChannel = true;
+        tg.showAlert('📢 Подпишитесь на канал и нажмите "Получить" еще раз');
         return;
     }
     
-    if(type === 'premium2' && userData.premium < 2) {
-        tg.showAlert('❌ Требуется Premium 2!');
-        return;
-    }
-    
+    // Бонус кошуу
     userData.balance += amount;
     userData.lastBonus[type] = today;
     
@@ -98,47 +134,25 @@ function claimBonus(type, amount) {
     
     sendToBot('bonus_claimed', {type, amount});
     tg.showAlert(`✅ Получено: ${amount} 🪙`);
+    
+    // Каналды ачуу (сунушталат)
+    tg.openTelegramLink(REQUIRED_CHANNEL);
 }
 
-// Подписка на Premium
 function subscribePremium(level) {
-    let starsNeeded = level === 1 ? 699 : 1999;
-    
-    if(userData.stars < starsNeeded) {
-        tg.showAlert(`❌ Недостаточно звезд! Нужно: ${starsNeeded} ⭐`);
-        return;
-    }
-    
-    userData.stars -= starsNeeded;
-    userData.premium = level;
-    
-    updateBalance();
-    saveUserData();
-    
-    sendToBot('premium_purchased', {level});
-    tg.showAlert(`✅ Premium ${level} активирован!`);
+    tg.openTelegramLink(`https://t.me/SQUIIDGAMES_KASSA?start=premium_${level}`);
 }
 
-// Покупка звезд
 function buyStars(amount) {
     tg.openTelegramLink(`https://t.me/SQUIIDGAMES_KASSA?start=buy_stars_${amount}`);
 }
 
-// Автоматическая покупка звезд (каждую минуту)
-function autoBuyStars() {
-    let chance = Math.random();
-    
-    if(chance < 0.3) { // 30% шанс
-        let starAmount = [699, 1999][Math.floor(Math.random() * 2)];
-        userData.stars += starAmount;
-        updateBalance();
-        saveUserData();
-        
-        console.log(`Авто-покупка: +${starAmount} ⭐`);
-    }
+// ============ CRASH ОЮНУ ============
+function playCrash() {
+    showTab('crash');
+    startCrashGame();
 }
 
-// Crash Game
 function startCrashGame() {
     crashGame.interval = setInterval(updateCrashGame, 100);
     startNewRound();
@@ -149,15 +163,23 @@ function startNewRound() {
     crashGame.multiplier = 1.00;
     crashGame.playerBet = null;
     
-    document.getElementById('multiplier').textContent = '1.00x';
-    document.getElementById('placeBetBtn').disabled = false;
-    document.getElementById('cashoutBtn').disabled = true;
+    let multiplierEl = document.getElementById('multiplier');
+    if(multiplierEl) multiplierEl.textContent = '1.00x';
     
-    // Таймер до следующего раунда
+    let placeBtn = document.getElementById('placeBetBtn');
+    if(placeBtn) placeBtn.disabled = false;
+    
+    let cashoutBtn = document.getElementById('cashoutBtn');
+    if(cashoutBtn) cashoutBtn.disabled = true;
+    
+    // Таймер
     crashGame.roundTimer = 10;
+    if(crashGame.timer) clearInterval(crashGame.timer);
+    
     crashGame.timer = setInterval(() => {
         crashGame.roundTimer--;
-        document.getElementById('timer').textContent = `Следующий раунд через: ${crashGame.roundTimer}с`;
+        let timerEl = document.getElementById('timer');
+        if(timerEl) timerEl.textContent = `Следующий раунд через: ${crashGame.roundTimer}с`;
         
         if(crashGame.roundTimer <= 0) {
             clearInterval(crashGame.timer);
@@ -168,20 +190,23 @@ function startNewRound() {
 
 function startCrashRound() {
     crashGame.active = true;
-    document.getElementById('placeBetBtn').disabled = true;
+    let placeBtn = document.getElementById('placeBetBtn');
+    if(placeBtn) placeBtn.disabled = true;
     
-    // Обновление мультипликатора
-    let crashPoint = 1 + Math.random() * 5; // Случайная точка краха (1-6x)
+    let crashPoint = 1 + Math.random() * 5;
     let currentMultiplier = 1.00;
+    
+    if(crashGame.interval) clearInterval(crashGame.interval);
     
     crashGame.interval = setInterval(() => {
         if(!crashGame.active) return;
         
         currentMultiplier += 0.01;
         crashGame.multiplier = currentMultiplier;
-        document.getElementById('multiplier').textContent = currentMultiplier.toFixed(2) + 'x';
         
-        // Крах
+        let multiplierEl = document.getElementById('multiplier');
+        if(multiplierEl) multiplierEl.textContent = currentMultiplier.toFixed(2) + 'x';
+        
         if(currentMultiplier >= crashPoint) {
             crash();
         }
@@ -192,21 +217,10 @@ function crash() {
     crashGame.active = false;
     clearInterval(crashGame.interval);
     
-    // Обработка ставок
-    crashGame.bets.forEach(bet => {
-        if(!bet.cashedOut) {
-            // Проигрыш
-            addToHistory(`❌ ${bet.username} проиграл ${bet.amount} 🪙`);
-        }
-    });
-    
     crashGame.bets = [];
     updateBetsList();
-    
-    // Добавление в историю
     addToHistory(`💥 Крах на ${crashGame.multiplier.toFixed(2)}x`);
     
-    // Новый раунд
     setTimeout(startNewRound, 3000);
 }
 
@@ -221,7 +235,8 @@ function placeBet() {
         return;
     }
     
-    let amount = parseInt(document.getElementById('betAmount').value);
+    let amountInput = document.getElementById('betAmount');
+    let amount = parseInt(amountInput ? amountInput.value : 1000);
     
     if(amount < 100) {
         tg.showAlert('❌ Минимальная ставка: 100 🪙');
@@ -236,7 +251,7 @@ function placeBet() {
     userData.balance -= amount;
     updateBalance();
     
-    let bet = {
+    crashGame.playerBet = {
         userId: userData.id,
         username: userData.username,
         amount: amount,
@@ -244,19 +259,17 @@ function placeBet() {
         cashedOut: false
     };
     
-    crashGame.playerBet = bet;
-    crashGame.bets.push(bet);
+    crashGame.bets.push(crashGame.playerBet);
     
-    document.getElementById('cashoutBtn').disabled = false;
+    let cashoutBtn = document.getElementById('cashoutBtn');
+    if(cashoutBtn) cashoutBtn.disabled = false;
+    
     updateBetsList();
-    
     sendToBot('bet_placed', {amount, game: 'crash'});
 }
 
 function cashOut() {
-    if(!crashGame.active || !crashGame.playerBet || crashGame.playerBet.cashedOut) {
-        return;
-    }
+    if(!crashGame.active || !crashGame.playerBet || crashGame.playerBet.cashedOut) return;
     
     let winAmount = Math.floor(crashGame.playerBet.amount * crashGame.multiplier);
     
@@ -268,9 +281,10 @@ function cashOut() {
     
     addToHistory(`✅ ${userData.username} забрал ${winAmount} 🪙 (${crashGame.multiplier.toFixed(2)}x)`);
     
-    document.getElementById('cashoutBtn').disabled = true;
-    updateBetsList();
+    let cashoutBtn = document.getElementById('cashoutBtn');
+    if(cashoutBtn) cashoutBtn.disabled = true;
     
+    updateBetsList();
     sendToBot('cashed_out', {
         amount: crashGame.playerBet.amount,
         multiplier: crashGame.multiplier,
@@ -280,6 +294,8 @@ function cashOut() {
 
 function updateBetsList() {
     let betsList = document.getElementById('betsList');
+    if(!betsList) return;
+    
     betsList.innerHTML = '';
     
     crashGame.bets.forEach(bet => {
@@ -287,15 +303,9 @@ function updateBetsList() {
         betItem.className = 'bet-item';
         
         if(bet.cashedOut) {
-            betItem.innerHTML = `
-                <span>✅ ${bet.username}</span>
-                <span>${bet.winAmount} 🪙 (${bet.multiplier.toFixed(2)}x)</span>
-            `;
+            betItem.innerHTML = `<span>✅ ${bet.username}</span> <span>${bet.winAmount} 🪙</span>`;
         } else {
-            betItem.innerHTML = `
-                <span>${bet.username}</span>
-                <span>${bet.amount} 🪙</span>
-            `;
+            betItem.innerHTML = `<span>${bet.username}</span> <span>${bet.amount} 🪙</span>`;
         }
         
         betsList.appendChild(betItem);
@@ -304,6 +314,8 @@ function updateBetsList() {
 
 function addToHistory(text) {
     let history = document.getElementById('betHistory');
+    if(!history) return;
+    
     let historyItem = document.createElement('div');
     historyItem.className = 'history-item';
     historyItem.textContent = text;
@@ -315,19 +327,29 @@ function addToHistory(text) {
     }
 }
 
-// Cards Game (Дурак)
-let cardsGame = {
-    active: false,
-    deck: [],
-    playerCards: [],
-    opponentCards: [],
-    tableCards: [],
-    trump: null,
-    bet: 0
-};
+function updateCrashGame() {
+    let playersCount = document.getElementById('playersCount');
+    if(playersCount) {
+        playersCount.textContent = `Игроков: ${crashGame.bets.length}`;
+    }
+    
+    let plane = document.getElementById('plane');
+    if(plane && crashGame.active) {
+        plane.style.animation = `fly ${3 / crashGame.multiplier}s linear infinite`;
+    }
+}
+
+// ============ КАРТА ОЮНУ (ДУРАК) ============
+function playCards() {
+    showTab('cards');
+    if(!cardsGame.active) {
+        startCardsGame();
+    }
+}
 
 function startCardsGame() {
-    let bet = parseInt(document.getElementById('cardsBet').value);
+    let betInput = document.getElementById('cardsBet');
+    let bet = parseInt(betInput ? betInput.value : 1000);
     
     if(bet < 100) {
         tg.showAlert('❌ Минимальная ставка: 100 🪙');
@@ -372,7 +394,6 @@ function initCardsDeck() {
         [cardsGame.deck[i], cardsGame.deck[j]] = [cardsGame.deck[j], cardsGame.deck[i]];
     }
     
-    // Выбор козыря
     cardsGame.trump = cardsGame.deck[0].suit;
 }
 
@@ -385,51 +406,48 @@ function dealCards() {
 }
 
 function displayCards() {
-    // Карты противника
     let opponentDiv = document.getElementById('opponentCards');
-    opponentDiv.innerHTML = '';
-    
-    for(let i = 0; i < cardsGame.opponentCards.length; i++) {
-        let card = document.createElement('div');
-        card.className = 'card';
-        card.textContent = '🂠';
-        opponentDiv.appendChild(card);
+    if(opponentDiv) {
+        opponentDiv.innerHTML = '';
+        for(let i = 0; i < cardsGame.opponentCards.length; i++) {
+            let card = document.createElement('div');
+            card.className = 'card';
+            card.textContent = '🂠';
+            opponentDiv.appendChild(card);
+        }
     }
     
-    // Карты игрока
     let playerDiv = document.getElementById('playerCards');
-    playerDiv.innerHTML = '';
+    if(playerDiv) {
+        playerDiv.innerHTML = '';
+        cardsGame.playerCards.forEach((card, index) => {
+            let cardEl = document.createElement('div');
+            cardEl.className = `card ${card.color}`;
+            cardEl.textContent = card.value + card.suit;
+            cardEl.onclick = () => playSelectedCard(index);
+            playerDiv.appendChild(cardEl);
+        });
+    }
     
-    cardsGame.playerCards.forEach((card, index) => {
-        let cardEl = document.createElement('div');
-        cardEl.className = `card ${card.color}`;
-        cardEl.textContent = card.value + card.suit;
-        cardEl.onclick = () => playSelectedCard(index);
-        playerDiv.appendChild(cardEl);
-    });
-    
-    // Карты на столе
     let tableDiv = document.getElementById('tableCards');
-    tableDiv.innerHTML = '';
-    
-    cardsGame.tableCards.forEach(card => {
-        let cardEl = document.createElement('div');
-        cardEl.className = `card ${card.color}`;
-        cardEl.textContent = card.value + card.suit;
-        tableDiv.appendChild(cardEl);
-    });
+    if(tableDiv) {
+        tableDiv.innerHTML = '';
+        cardsGame.tableCards.forEach(card => {
+            let cardEl = document.createElement('div');
+            cardEl.className = `card ${card.color}`;
+            cardEl.textContent = card.value + card.suit;
+            tableDiv.appendChild(cardEl);
+        });
+    }
 }
 
 function playSelectedCard(index) {
     if(!cardsGame.active) return;
     
     let card = cardsGame.playerCards[index];
-    
-    // Логика игры в дурака (упрощенная)
     cardsGame.tableCards.push(card);
     cardsGame.playerCards.splice(index, 1);
     
-    // Противник бьет
     setTimeout(() => {
         if(cardsGame.opponentCards.length > 0) {
             let opponentCard = cardsGame.opponentCards[0];
@@ -439,7 +457,6 @@ function playSelectedCard(index) {
         
         displayCards();
         
-        // Проверка конца игры
         if(cardsGame.playerCards.length === 0) {
             winCardsGame();
         }
@@ -453,7 +470,6 @@ function winCardsGame() {
     
     updateBalance();
     tg.showAlert(`✅ Вы выиграли! +${winAmount} 🪙`);
-    
     sendToBot('cards_game_won', {win: winAmount});
 }
 
@@ -462,21 +478,18 @@ function takeCards() {
     
     cardsGame.playerCards.push(...cardsGame.tableCards);
     cardsGame.tableCards = [];
-    
     displayCards();
 }
 
 function passCards() {
     if(!cardsGame.active) return;
     
-    // Противник берет карты
     cardsGame.opponentCards.push(...cardsGame.tableCards);
     cardsGame.tableCards = [];
-    
     displayCards();
 }
 
-// Турнир
+// ============ ТУРНИР ============
 function registerTournament() {
     if(userData.premium < 2) {
         tg.showAlert('❌ Требуется Premium 2!');
@@ -495,48 +508,48 @@ function registerTournament() {
     
     updateTournamentDisplay();
     sendToBot('tournament_register', {});
-    
     tg.showAlert('✅ Вы зарегистрированы на турнир!');
 }
 
 function loadTournamentPlayers() {
-    // Загрузка из localStorage
     let saved = localStorage.getItem('tournament');
     if(saved) {
-        tournament = JSON.parse(saved);
+        try {
+            tournament = JSON.parse(saved);
+        } catch(e) {}
     }
-    
     updateTournamentDisplay();
 }
 
 function updateTournamentDisplay() {
-    document.querySelector('.players-count').textContent = `Зарегистрировано: ${tournament.players.length}/150`;
+    let playersCount = document.querySelector('.players-count');
+    if(playersCount) {
+        playersCount.textContent = `Зарегистрировано: ${tournament.players.length}/150`;
+    }
     
     let playersList = document.getElementById('playersList');
-    playersList.innerHTML = '';
-    
-    tournament.players.forEach((player, index) => {
-        let playerItem = document.createElement('div');
-        playerItem.className = 'player-item';
-        playerItem.textContent = `${index + 1}. ${player.username}`;
-        playersList.appendChild(playerItem);
-    });
-}
-
-// Сохранение данных
-function saveUserData() {
-    localStorage.setItem('userData', JSON.stringify(userData));
-    localStorage.setItem('tournament', JSON.stringify(tournament));
-}
-
-// Обновление игры (для анимации)
-function updateCrashGame() {
-    // Обновление счетчика игроков
-    document.getElementById('playersCount').textContent = `Игроков: ${crashGame.bets.length}`;
-    
-    // Анимация самолета
-    let plane = document.getElementById('plane');
-    if(crashGame.active) {
-        plane.style.animation = `fly ${3 / crashGame.multiplier}s linear infinite`;
+    if(playersList) {
+        playersList.innerHTML = '';
+        tournament.players.forEach((player, index) => {
+            let playerItem = document.createElement('div');
+            playerItem.className = 'player-item';
+            playerItem.textContent = `${index + 1}. ${player.username}`;
+            playersList.appendChild(playerItem);
+        });
     }
-}
+}git add script.js
+git commit -m "Fixed script.js with coins and games"
+git push origin main
+
+git add script.js
+git commit -m "Fixed script.js with coins and games"
+git push origin main
+
+
+
+
+
+
+
+
+
