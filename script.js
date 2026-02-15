@@ -1,555 +1,517 @@
-let tg = window.Telegram.WebApp;
+// Telegram WebApp инициализациясы
+const tg = window.Telegram.WebApp;
 tg.expand();
 
-// ============ КОНФИГУРАЦИЯ ============
-const REQUIRED_CHANNEL = "@SQUIIDGAMES_CHANNEL"; // КАНАЛ АТЫН ӨЗГӨРТҮҢҮЗ!
+// Глобалдык өзгөрмөлөр
+let userId = null;
+let userBalance = 0;
+let userStars = 0;
+let userName = '';
+let premiumType = 0;
 
-// ============ ГЛОБАЛДЫК ӨЗГӨРМӨЛӨР ============
-let userData = {
-    id: tg.initDataUnsafe?.user?.id || 0,
-    username: tg.initDataUnsafe?.user?.username || 'player',
-    balance: 5000,        // Баланс МОНЕТА менен
-    premium: 0,
-    lastBonus: {},
-    checkedChannel: false
-};
+// Краш оюну үчүн өзгөрмөлөр
+let crashGameActive = false;
+let crashMultiplier = 1.0;
+let crashBets = {};
+let playerBet = 0;
+let hasCashedOut = false;
+let crashInterval = null;
+let canvas = null;
+let ctx = null;
+let planeX = 20;
+let planeY = 200;
 
-// Оюндар үчүн өзгөрмөлөр
-let crashGame = {
-    active: false,
-    multiplier: 1.00,
-    bets: [],
-    playerBet: null,
-    interval: null,
-    timer: null,
-    roundTimer: 10
-};
+// Дурак оюну үчүн өзгөрмөлөр
+let durakGame = null;
+let playerCards = [];
+let opponentCards = [];
+let tableCards = [];
+let trumpSuit = '♥';
+let currentBet = 1000;
 
-let cardsGame = {
-    active: false,
-    deck: [],
-    playerCards: [],
-    opponentCards: [],
-    tableCards: [],
-    trump: null,
-    bet: 0
-};
+// Турнир үчүн өзгөрмөлөр
+let tournamentActive = false;
+let tournamentCount = 0;
 
-let tournament = {
-    players: []
-};
-
-// ============ БАШТАЛКЫ ИНИЦИАЛИЗАЦИЯ ============
+// Баштапкы инициализация
 document.addEventListener('DOMContentLoaded', function() {
+    initApp();
+    initCrashCanvas();
     loadUserData();
-    updateBalance();
-    startCrashGame();
-    loadTournamentPlayers();
 });
 
-// ============ Telegram API ============
-function sendToBot(action, data) {
+// Колдонуучунун маалыматтарын жүктөө
+function loadUserData() {
     tg.sendData(JSON.stringify({
-        action: action,
-        data: data
+        action: 'get_user'
     }));
 }
 
-// ============ КОЛДОНУУЧУ МААЛЫМАТТАРЫ ============
-function loadUserData() {
-    let saved = localStorage.getItem('userData');
-    if(saved) {
-        try {
-            userData = JSON.parse(saved);
-        } catch(e) {}
-    }
-    updateBalance();
-}
-
-function saveUserData() {
-    localStorage.setItem('userData', JSON.stringify(userData));
-}
-
-function updateBalance() {
-    let balanceSpan = document.getElementById('userBalance');
-    if(balanceSpan) balanceSpan.textContent = userData.balance;
-}
-
-// ============ ТАБДЫ АЛМАШТЫРУУ ============
-function showTab(tabName) {
-    // Бардык табтарды жашыруу
-    document.querySelectorAll('.tab-content').forEach(tab => {
-        tab.classList.remove('active');
-    });
-    
-    // Бардык кнопкалардын активдүүлүгүн алуу
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    
-    // Тандалган табты көрсөтүү
-    let selectedTab = document.getElementById(tabName + 'Tab');
-    if(selectedTab) selectedTab.classList.add('active');
-    
-    // Тандалган кнопканы активдештирүү
-    let selectedBtn = document.querySelector(`[onclick="showTab('${tabName}')"]`);
-    if(selectedBtn) selectedBtn.classList.add('active');
-}
-
-// ============ БОНУС СИСТЕМАСЫ ============
-async function checkChannelSubscription() {
+// Telegram'дан келген жоопторду угуу
+tg.onEvent('webAppData', function(data) {
     try {
-        tg.sendData(JSON.stringify({
-            action: 'check_channel',
-            channel: REQUIRED_CHANNEL
-        }));
-    } catch(e) {
-        console.log(e);
+        const response = JSON.parse(data);
+        if (response.user_id) {
+            userId = response.user_id;
+            userBalance = response.balance;
+            userName = response.display_name || 'Игрок';
+            userStars = response.stars || 0;
+            premiumType = response.premium_type || 0;
+            
+            updateUI();
+        } else if (response.success !== undefined) {
+            handleActionResponse(response);
+        }
+    } catch (e) {
+        console.error('Ошибка обработки данных:', e);
     }
+});
+
+// UI жаңыртуу
+function updateUI() {
+    document.getElementById('balance').textContent = userBalance.toLocaleString() + ' 🪙';
+    document.getElementById('profile-name').textContent = userName;
+    document.getElementById('profile-id').textContent = 'ID: ' + (userId || '...');
+    
+    // Күндүк бонусту текшерүү
+    checkDailyBonus();
 }
 
-function claimBonus(type, amount) {
-    let today = new Date().toDateString();
+// Күндүк бонусту текшерүү
+function checkDailyBonus() {
+    tg.sendData(JSON.stringify({
+        action: 'get_daily_bonus'
+    }));
+}
+
+// Күндүк бонусту алуу
+function claimDailyBonus() {
+    const button = document.querySelector('#daily-bonus .bonus-button');
+    button.textContent = 'Получение...';
+    button.disabled = true;
     
-    // Бүгүн бонус алдыбы?
-    if(userData.lastBonus[type] === today) {
-        tg.showAlert('❌ Бонус уже получен сегодня!');
+    tg.sendData(JSON.stringify({
+        action: 'claim_daily_bonus'
+    }));
+}
+
+// Жылдызча менен сатып алуу
+function buyWithStars() {
+    const select = document.getElementById('stars-amount');
+    const starsAmount = parseInt(select.value);
+    
+    // Жылдызчанын баасы (1 звезда = 500 монет)
+    const coinAmount = starsAmount * 500;
+    
+    tg.sendData(JSON.stringify({
+        action: 'buy_with_stars',
+        stars: starsAmount,
+        coins: coinAmount
+    }));
+}
+
+// Тариф сатып алуу
+function buyTariff(stars, coins) {
+    if (userStars < stars) {
+        showNotification('Недостаточно звёзд!', 'error');
         return;
     }
     
-    // Каналды текшерүү (биринчи жолу)
-    if(!userData.checkedChannel) {
-        checkChannelSubscription();
-        userData.checkedChannel = true;
-        tg.showAlert('📢 Подпишитесь на канал и нажмите "Получить" еще раз');
-        return;
+    tg.sendData(JSON.stringify({
+        action: 'buy_with_stars',
+        stars: stars,
+        coins: coins
+    }));
+}
+
+// Играларды көрсөтүү
+function showGame(game) {
+    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.game-container').forEach(container => container.classList.remove('active'));
+    
+    event.target.classList.add('active');
+    document.getElementById(game + '-game').classList.add('active');
+    
+    if (game === 'crash') {
+        startCrashGame();
     }
-    
-    // Бонус кошуу
-    userData.balance += amount;
-    userData.lastBonus[type] = today;
-    
-    updateBalance();
-    saveUserData();
-    
-    sendToBot('bonus_claimed', {type, amount});
-    tg.showAlert(`✅ Получено: ${amount} 🪙`);
-    
-    // Каналды ачуу (сунушталат)
-    tg.openTelegramLink(REQUIRED_CHANNEL);
 }
 
-function subscribePremium(level) {
-    tg.openTelegramLink(`https://t.me/SQUIIDGAMES_KASSA?start=premium_${level}`);
+// Краш оюнунун канвасын инициализациялоо
+function initCrashCanvas() {
+    canvas = document.getElementById('crashCanvas');
+    ctx = canvas.getContext('2d');
+    drawCrashScene();
 }
 
-function buyStars(amount) {
-    tg.openTelegramLink(`https://t.me/SQUIIDGAMES_KASSA?start=buy_stars_${amount}`);
+// Краш сценасын тартуу
+function drawCrashScene() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Горизонт
+    ctx.fillStyle = '#87CEEB';
+    ctx.fillRect(0, 0, canvas.width, 150);
+    ctx.fillStyle = '#FFE4B5';
+    ctx.fillRect(0, 150, canvas.width, 150);
+    
+    // Облака
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.arc(100, 50, 30, 0, Math.PI*2);
+    ctx.arc(150, 70, 40, 0, Math.PI*2);
+    ctx.arc(300, 30, 25, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Самолёттун изи
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(planeX - 50, planeY);
+    ctx.lineTo(planeX, planeY);
+    ctx.stroke();
+    
+    // Самолёттун позициясын жаңыртуу
+    const plane = document.getElementById('plane-emoji');
+    plane.style.left = planeX + 'px';
+    plane.style.bottom = (canvas.height - planeY) + 'px';
 }
 
-// ============ CRASH ОЮНУ ============
-function playCrash() {
-    showTab('crash');
-    startCrashGame();
-}
-
+// Краш оюнун баштоо
 function startCrashGame() {
-    crashGame.interval = setInterval(updateCrashGame, 100);
-    startNewRound();
-}
-
-function startNewRound() {
-    crashGame.active = false;
-    crashGame.multiplier = 1.00;
-    crashGame.playerBet = null;
+    if (crashInterval) clearInterval(crashInterval);
     
-    let multiplierEl = document.getElementById('multiplier');
-    if(multiplierEl) multiplierEl.textContent = '1.00x';
+    crashGameActive = true;
+    crashMultiplier = 1.0;
+    crashBets = {};
+    hasCashedOut = false;
     
-    let placeBtn = document.getElementById('placeBetBtn');
-    if(placeBtn) placeBtn.disabled = false;
+    document.getElementById('multiplier').textContent = '1.00x';
+    document.getElementById('plane-status').textContent = 'Приём ставок...';
+    document.getElementById('cashout-btn').disabled = true;
     
-    let cashoutBtn = document.getElementById('cashoutBtn');
-    if(cashoutBtn) cashoutBtn.disabled = true;
+    // Ставкаларды көрсөтүү
+    updateBetsList();
     
-    // Таймер
-    crashGame.roundTimer = 10;
-    if(crashGame.timer) clearInterval(crashGame.timer);
-    
-    crashGame.timer = setInterval(() => {
-        crashGame.roundTimer--;
-        let timerEl = document.getElementById('timer');
-        if(timerEl) timerEl.textContent = `Следующий раунд через: ${crashGame.roundTimer}с`;
-        
-        if(crashGame.roundTimer <= 0) {
-            clearInterval(crashGame.timer);
+    // 10 секунд күтүп, андан кийин оюнду баштоо
+    setTimeout(() => {
+        if (crashGameActive) {
             startCrashRound();
         }
-    }, 1000);
+    }, 10000);
 }
 
+// Краш раундун баштоо
 function startCrashRound() {
-    crashGame.active = true;
-    let placeBtn = document.getElementById('placeBetBtn');
-    if(placeBtn) placeBtn.disabled = true;
+    if (!crashGameActive) return;
     
-    let crashPoint = 1 + Math.random() * 5;
-    let currentMultiplier = 1.00;
+    document.getElementById('plane-status').textContent = 'Самолёт взлетает!';
+    document.getElementById('cashout-btn').disabled = false;
     
-    if(crashGame.interval) clearInterval(crashGame.interval);
+    const crashPoint = 1.5 + Math.random() * 8.5; // 1.5x - 10x
     
-    crashGame.interval = setInterval(() => {
-        if(!crashGame.active) return;
+    let startTime = Date.now();
+    
+    crashInterval = setInterval(() => {
+        if (!crashGameActive) {
+            clearInterval(crashInterval);
+            return;
+        }
         
-        currentMultiplier += 0.01;
-        crashGame.multiplier = currentMultiplier;
+        const elapsed = (Date.now() - startTime) / 1000;
+        crashMultiplier = 1.0 + elapsed * 0.5; // Секундасына 0.5x
         
-        let multiplierEl = document.getElementById('multiplier');
-        if(multiplierEl) multiplierEl.textContent = currentMultiplier.toFixed(2) + 'x';
+        // Самолёттун кыймылы
+        planeX = 20 + elapsed * 50;
+        planeY = 200 - elapsed * 30;
         
-        if(currentMultiplier >= crashPoint) {
-            crash();
+        if (planeY < 50) planeY = 50;
+        if (planeX > canvas.width - 50) planeX = canvas.width - 50;
+        
+        document.getElementById('multiplier').textContent = crashMultiplier.toFixed(2) + 'x';
+        drawCrashScene();
+        
+        // Жарылуу
+        if (crashMultiplier >= crashPoint) {
+            crashGameActive = false;
+            clearInterval(crashInterval);
+            
+            document.getElementById('plane-status').textContent = 'САМОЛЁТ ВЗОРВАЛСЯ! 💥';
+            document.getElementById('multiplier').classList.add('shake');
+            document.getElementById('cashout-btn').disabled = true;
+            
+            // Утулгандарды эсептөө
+            setTimeout(() => {
+                document.getElementById('multiplier').classList.remove('shake');
+                startCrashGame(); // Кийинки раунд
+            }, 5000);
         }
     }, 100);
 }
 
-function crash() {
-    crashGame.active = false;
-    clearInterval(crashGame.interval);
+// Краш оюнуна ставка коюу
+function placeCrashBet() {
+    const amount = parseInt(document.getElementById('bet-amount').value);
     
-    crashGame.bets = [];
-    updateBetsList();
-    addToHistory(`💥 Крах на ${crashGame.multiplier.toFixed(2)}x`);
+    if (amount < 1000) {
+        showNotification('Минимальная ставка: 1000 🪙', 'error');
+        return;
+    }
     
-    setTimeout(startNewRound, 3000);
+    if (amount > userBalance) {
+        showNotification('Недостаточно монет!', 'error');
+        return;
+    }
+    
+    if (!crashGameActive || crashMultiplier > 1.1) {
+        showNotification('Ставки принимаются только до взлёта!', 'error');
+        return;
+    }
+    
+    tg.sendData(JSON.stringify({
+        action: 'crash_bet',
+        amount: amount
+    }));
+    
+    playerBet = amount;
+    document.getElementById('cashout-btn').disabled = false;
 }
 
-function placeBet() {
-    if(!crashGame.active) {
-        tg.showAlert('❌ Раунд еще не начался!');
-        return;
-    }
+// Забрать кылуу
+function cashout() {
+    if (!crashGameActive || hasCashedOut) return;
     
-    if(crashGame.playerBet) {
-        tg.showAlert('❌ Вы уже сделали ставку!');
-        return;
-    }
+    tg.sendData(JSON.stringify({
+        action: 'crash_cashout'
+    }));
     
-    let amountInput = document.getElementById('betAmount');
-    let amount = parseInt(amountInput ? amountInput.value : 1000);
-    
-    if(amount < 100) {
-        tg.showAlert('❌ Минимальная ставка: 100 🪙');
-        return;
-    }
-    
-    if(amount > userData.balance) {
-        tg.showAlert('❌ Недостаточно монет!');
-        return;
-    }
-    
-    userData.balance -= amount;
-    updateBalance();
-    
-    crashGame.playerBet = {
-        userId: userData.id,
-        username: userData.username,
-        amount: amount,
-        multiplier: crashGame.multiplier,
-        cashedOut: false
-    };
-    
-    crashGame.bets.push(crashGame.playerBet);
-    
-    let cashoutBtn = document.getElementById('cashoutBtn');
-    if(cashoutBtn) cashoutBtn.disabled = false;
-    
-    updateBetsList();
-    sendToBot('bet_placed', {amount, game: 'crash'});
+    hasCashedOut = true;
+    document.getElementById('cashout-btn').disabled = true;
 }
 
-function cashOut() {
-    if(!crashGame.active || !crashGame.playerBet || crashGame.playerBet.cashedOut) return;
-    
-    let winAmount = Math.floor(crashGame.playerBet.amount * crashGame.multiplier);
-    
-    userData.balance += winAmount;
-    updateBalance();
-    
-    crashGame.playerBet.cashedOut = true;
-    crashGame.playerBet.winAmount = winAmount;
-    
-    addToHistory(`✅ ${userData.username} забрал ${winAmount} 🪙 (${crashGame.multiplier.toFixed(2)}x)`);
-    
-    let cashoutBtn = document.getElementById('cashoutBtn');
-    if(cashoutBtn) cashoutBtn.disabled = true;
-    
-    updateBetsList();
-    sendToBot('cashed_out', {
-        amount: crashGame.playerBet.amount,
-        multiplier: crashGame.multiplier,
-        win: winAmount
-    });
-}
-
+// Ставкалардын тизмесин жаңыртуу
 function updateBetsList() {
-    let betsList = document.getElementById('betsList');
-    if(!betsList) return;
+    tg.sendData(JSON.stringify({
+        action: 'crash_status'
+    }));
+}
+
+// Дурак оюнун издөө
+function findDurakGame() {
+    currentBet = parseInt(document.getElementById('durak-bet').value);
     
-    betsList.innerHTML = '';
+    if (currentBet < 1000) {
+        showNotification('Минимальная ставка: 1000 🪙', 'error');
+        return;
+    }
     
-    crashGame.bets.forEach(bet => {
-        let betItem = document.createElement('div');
-        betItem.className = 'bet-item';
-        
-        if(bet.cashedOut) {
-            betItem.innerHTML = `<span>✅ ${bet.username}</span> <span>${bet.winAmount} 🪙</span>`;
-        } else {
-            betItem.innerHTML = `<span>${bet.username}</span> <span>${bet.amount} 🪙</span>`;
-        }
-        
-        betsList.appendChild(betItem);
+    if (currentBet > userBalance) {
+        showNotification('Недостаточно монет!', 'error');
+        return;
+    }
+    
+    document.getElementById('durak-status').textContent = 'Поиск игрока...';
+    
+    // Дурак оюнун симуляциялоо (реалдуу ишке ашыруу үчүн WebSocket керек)
+    setTimeout(() => {
+        startDurakGame();
+    }, 3000);
+}
+
+// Дурак оюнун баштоо
+function startDurakGame() {
+    document.getElementById('durak-status').textContent = 'Игра началась!';
+    
+    // Карталарды түзүү
+    const suits = ['♥', '♦', '♣', '♠'];
+    const values = ['6', '7', '8', '9', '10', 'В', 'Д', 'К', 'Т'];
+    
+    trumpSuit = suits[Math.floor(Math.random() * suits.length)];
+    document.getElementById('trump-card').textContent = trumpSuit;
+    
+    // Оюнчунун карталары
+    playerCards = [];
+    for (let i = 0; i < 6; i++) {
+        const suit = suits[Math.floor(Math.random() * suits.length)];
+        const value = values[Math.floor(Math.random() * values.length)];
+        playerCards.push({ suit, value });
+    }
+    
+    // Каршылаштын карталары
+    opponentCards = [];
+    for (let i = 0; i < 6; i++) {
+        const suit = suits[Math.floor(Math.random() * suits.length)];
+        const value = values[Math.floor(Math.random() * values.length)];
+        opponentCards.push({ suit, value });
+    }
+    
+    renderDurakCards();
+}
+
+// Дурак карталарын көрсөтүү
+function renderDurakCards() {
+    const opponentDiv = document.getElementById('opponent-cards');
+    const playerDiv = document.getElementById('player-cards');
+    const tableDiv = document.getElementById('table-cards');
+    
+    opponentDiv.innerHTML = '';
+    playerDiv.innerHTML = '';
+    tableDiv.innerHTML = '';
+    
+    // Каршылаштын карталары (жашыруун)
+    opponentCards.forEach(() => {
+        const card = document.createElement('div');
+        card.className = 'card black';
+        card.textContent = '🂠';
+        opponentDiv.appendChild(card);
+    });
+    
+    // Оюнчунун карталары
+    playerCards.forEach((card, index) => {
+        const cardDiv = document.createElement('div');
+        cardDiv.className = `card ${card.suit === '♥' || card.suit === '♦' ? 'red' : 'black'}`;
+        cardDiv.textContent = card.value + card.suit;
+        cardDiv.onclick = () => playCard(index);
+        playerDiv.appendChild(cardDiv);
     });
 }
 
-function addToHistory(text) {
-    let history = document.getElementById('betHistory');
-    if(!history) return;
+// Карта ойноо
+function playCard(index) {
+    const card = playerCards[index];
+    tableCards.push(card);
+    playerCards.splice(index, 1);
     
-    let historyItem = document.createElement('div');
-    historyItem.className = 'history-item';
-    historyItem.textContent = text;
+    renderDurakCards();
     
-    history.appendChild(historyItem);
-    
-    if(history.children.length > 10) {
-        history.removeChild(history.children[1]);
+    // Каршылаштын жообу (автоматтык)
+    setTimeout(() => {
+        if (opponentCards.length > 0) {
+            const randomIndex = Math.floor(Math.random() * opponentCards.length);
+            const opponentCard = opponentCards[randomIndex];
+            tableCards.push(opponentCard);
+            opponentCards.splice(randomIndex, 1);
+            
+            renderDurakCards();
+            
+            // Раундду текшерүү
+            checkDurakRound();
+        }
+    }, 1000);
+}
+
+// Дурак раундун текшерүү
+function checkDurakRound() {
+    if (tableCards.length >= 2) {
+        // Эң жогорку картаны табуу
+        setTimeout(() => {
+            tableCards = [];
+            renderDurakCards();
+            
+            // Карталарды толуктоо
+            if (playerCards.length < 6) {
+                // Колодадан карта алуу
+            }
+            if (opponentCards.length < 6) {
+                // Колодадан карта алуу
+            }
+            
+            // Оюндун аякташын текшерүү
+            if (playerCards.length === 0) {
+                document.getElementById('durak-status').textContent = 'Вы выиграли! +' + (currentBet * 2) + ' 🪙';
+                userBalance += currentBet * 2;
+                updateUI();
+            } else if (opponentCards.length === 0) {
+                document.getElementById('durak-status').textContent = 'Вы проиграли! -' + currentBet + ' 🪙';
+                userBalance -= currentBet;
+                updateUI();
+            }
+        }, 2000);
     }
 }
 
-function updateCrashGame() {
-    let playersCount = document.getElementById('playersCount');
-    if(playersCount) {
-        playersCount.textContent = `Игроков: ${crashGame.bets.length}`;
-    }
-    
-    let plane = document.getElementById('plane');
-    if(plane && crashGame.active) {
-        plane.style.animation = `fly ${3 / crashGame.multiplier}s linear infinite`;
-    }
-}
-
-// ============ КАРТА ОЮНУ (ДУРАК) ============
-function playCards() {
-    showTab('cards');
-    if(!cardsGame.active) {
-        startCardsGame();
-    }
-}
-
-function startCardsGame() {
-    let betInput = document.getElementById('cardsBet');
-    let bet = parseInt(betInput ? betInput.value : 1000);
-    
-    if(bet < 100) {
-        tg.showAlert('❌ Минимальная ставка: 100 🪙');
+// Турнирге катталуу
+function registerTournament() {
+    if (premiumType < 2) {
+        showNotification('Турнир только для Premium 2!', 'error');
         return;
     }
     
-    if(bet > userData.balance) {
-        tg.showAlert('❌ Недостаточно монет!');
-        return;
-    }
+    tg.sendData(JSON.stringify({
+        action: 'tournament_register'
+    }));
     
-    userData.balance -= bet;
-    cardsGame.bet = bet;
-    cardsGame.active = true;
-    
-    updateBalance();
-    initCardsDeck();
-    dealCards();
-    
-    sendToBot('cards_game_started', {bet});
+    tournamentCount++;
+    document.getElementById('tournament-count').textContent = tournamentCount + '/150';
+    showNotification('Вы зарегистрированы на турнир!', 'success');
 }
 
-function initCardsDeck() {
-    let suits = ['♠', '♣', '♥', '♦'];
-    let values = ['6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-    
-    cardsGame.deck = [];
-    
-    for(let suit of suits) {
-        for(let value of values) {
-            cardsGame.deck.push({
-                value: value,
-                suit: suit,
-                color: (suit === '♥' || suit === '♦') ? 'red' : 'black'
-            });
+// Ботту ачуу
+function openBot() {
+    tg.openTelegramLink('https://t.me/SQUIIDGAMES_BOT');
+}
+
+// Жоопторду иштетүү
+function handleActionResponse(response) {
+    if (response.success) {
+        if (response.bonus) {
+            userBalance += response.bonus;
+            updateUI();
+            showNotification('Бонус получен: +' + response.bonus + ' 🪙', 'success');
+        } else if (response.coins) {
+            userBalance += response.coins;
+            updateUI();
+            showNotification('Покупка успешна: +' + response.coins + ' 🪙', 'success');
+        } else if (response.result) {
+            // Краш оюнунун жообу
+            if (response.result.includes('забрали')) {
+                showNotification('Вы забрали: ' + response.result, 'success');
+            }
+        }
+    } else {
+        if (response.error === 'Already claimed') {
+            showNotification('Вы уже получили бонус сегодня!', 'error');
+            document.querySelector('#daily-bonus .bonus-button').textContent = 'Уже получено';
+        } else {
+            showNotification('Ошибка: ' + response.error, 'error');
         }
     }
-    
-    // Перемешивание
-    for(let i = cardsGame.deck.length - 1; i > 0; i--) {
-        let j = Math.floor(Math.random() * (i + 1));
-        [cardsGame.deck[i], cardsGame.deck[j]] = [cardsGame.deck[j], cardsGame.deck[i]];
-    }
-    
-    cardsGame.trump = cardsGame.deck[0].suit;
 }
 
-function dealCards() {
-    cardsGame.playerCards = cardsGame.deck.slice(0, 6);
-    cardsGame.opponentCards = cardsGame.deck.slice(6, 12);
-    cardsGame.tableCards = [];
+// Билдирүү көрсөтүү
+function showNotification(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: ${type === 'success' ? '#4caf50' : '#f44336'};
+        color: white;
+        padding: 15px 30px;
+        border-radius: 50px;
+        font-weight: bold;
+        z-index: 1000;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        animation: slideDown 0.3s ease;
+    `;
     
-    displayCards();
-}
-
-function displayCards() {
-    let opponentDiv = document.getElementById('opponentCards');
-    if(opponentDiv) {
-        opponentDiv.innerHTML = '';
-        for(let i = 0; i < cardsGame.opponentCards.length; i++) {
-            let card = document.createElement('div');
-            card.className = 'card';
-            card.textContent = '🂠';
-            opponentDiv.appendChild(card);
-        }
-    }
-    
-    let playerDiv = document.getElementById('playerCards');
-    if(playerDiv) {
-        playerDiv.innerHTML = '';
-        cardsGame.playerCards.forEach((card, index) => {
-            let cardEl = document.createElement('div');
-            cardEl.className = `card ${card.color}`;
-            cardEl.textContent = card.value + card.suit;
-            cardEl.onclick = () => playSelectedCard(index);
-            playerDiv.appendChild(cardEl);
-        });
-    }
-    
-    let tableDiv = document.getElementById('tableCards');
-    if(tableDiv) {
-        tableDiv.innerHTML = '';
-        cardsGame.tableCards.forEach(card => {
-            let cardEl = document.createElement('div');
-            cardEl.className = `card ${card.color}`;
-            cardEl.textContent = card.value + card.suit;
-            tableDiv.appendChild(cardEl);
-        });
-    }
-}
-
-function playSelectedCard(index) {
-    if(!cardsGame.active) return;
-    
-    let card = cardsGame.playerCards[index];
-    cardsGame.tableCards.push(card);
-    cardsGame.playerCards.splice(index, 1);
+    document.body.appendChild(notification);
     
     setTimeout(() => {
-        if(cardsGame.opponentCards.length > 0) {
-            let opponentCard = cardsGame.opponentCards[0];
-            cardsGame.tableCards.push(opponentCard);
-            cardsGame.opponentCards.shift();
-        }
-        
-        displayCards();
-        
-        if(cardsGame.playerCards.length === 0) {
-            winCardsGame();
-        }
-    }, 500);
+        notification.remove();
+    }, 3000);
 }
 
-function winCardsGame() {
-    let winAmount = cardsGame.bet * 2;
-    userData.balance += winAmount;
-    cardsGame.active = false;
-    
-    updateBalance();
-    tg.showAlert(`✅ Вы выиграли! +${winAmount} 🪙`);
-    sendToBot('cards_game_won', {win: winAmount});
-}
-
-function takeCards() {
-    if(!cardsGame.active) return;
-    
-    cardsGame.playerCards.push(...cardsGame.tableCards);
-    cardsGame.tableCards = [];
-    displayCards();
-}
-
-function passCards() {
-    if(!cardsGame.active) return;
-    
-    cardsGame.opponentCards.push(...cardsGame.tableCards);
-    cardsGame.tableCards = [];
-    displayCards();
-}
-
-// ============ ТУРНИР ============
-function registerTournament() {
-    if(userData.premium < 2) {
-        tg.showAlert('❌ Требуется Premium 2!');
-        return;
+// Краш оюнунун статусун автоматтык түрдө жаңыртуу
+setInterval(() => {
+    if (document.getElementById('crash-game').classList.contains('active')) {
+        tg.sendData(JSON.stringify({
+            action: 'crash_status'
+        }));
     }
-    
-    if(tournament.players.length >= 150) {
-        tg.showAlert('❌ Турнир заполнен!');
-        return;
-    }
-    
-    tournament.players.push({
-        id: userData.id,
-        username: userData.username
-    });
-    
-    updateTournamentDisplay();
-    sendToBot('tournament_register', {});
-    tg.showAlert('✅ Вы зарегистрированы на турнир!');
-}
-
-function loadTournamentPlayers() {
-    let saved = localStorage.getItem('tournament');
-    if(saved) {
-        try {
-            tournament = JSON.parse(saved);
-        } catch(e) {}
-    }
-    updateTournamentDisplay();
-}
-
-function updateTournamentDisplay() {
-    let playersCount = document.querySelector('.players-count');
-    if(playersCount) {
-        playersCount.textContent = `Зарегистрировано: ${tournament.players.length}/150`;
-    }
-    
-    let playersList = document.getElementById('playersList');
-    if(playersList) {
-        playersList.innerHTML = '';
-        tournament.players.forEach((player, index) => {
-            let playerItem = document.createElement('div');
-            playerItem.className = 'player-item';
-            playerItem.textContent = `${index + 1}. ${player.username}`;
-            playersList.appendChild(playerItem);
-        });
-    }
-}git add script.js
-git commit -m "Fixed script.js with coins and games"
-git push origin main
-
-git add script.js
-git commit -m "Fixed script.js with coins and games"
-git push origin main
-
-
-
-
-
-
+}, 2000);
 
 
 

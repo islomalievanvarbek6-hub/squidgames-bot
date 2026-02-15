@@ -2,193 +2,633 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
 }
 
 body {
-    background: linear-gradient(135deg, #0a0f1e 0%, #1a1f2f 100%);
-    color: #fff;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 20px;
 }
 
 .app-container {
-    max-width: 600px;
-    margin: 0 auto;
+    max-width: 500px;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 30px;
     padding: 20px;
-    padding-bottom: 80px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    backdrop-filter: blur(10px);
 }
 
+/* Header */
 .header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 15px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 15px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 20px;
+    color: white;
     margin-bottom: 20px;
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 215, 0, 0.2);
 }
 
 .logo {
-    font-size: 18px;
-    font-weight: bold;
-    color: #ffd700;
-    text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
-}
-
-.user-info {
-    font-size: 16px;
-}
-
-.user-info span {
-    color: #ffd700;
-    font-weight: bold;
-    margin: 0 5px;
-}
-
-.tabs {
-    display: flex;
-    gap: 5px;
-    margin-bottom: 20px;
-    background: rgba(0, 0, 0, 0.3);
-    padding: 5px;
-    border-radius: 10px;
-}
-
-.tab-btn {
-    flex: 1;
-    padding: 12px;
-    background: transparent;
-    border: none;
-    color: #888;
-    font-weight: bold;
-    cursor: pointer;
-    border-radius: 8px;
-    transition: all 0.3s;
-}
-
-.tab-btn.active {
-    background: linear-gradient(135deg, #ffd700, #ffaa00);
-    color: #000;
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
-}
-
-.tab-content {
-    display: none;
-}
-
-.tab-content.active {
-    display: block;
-}
-
-.bonus-title {
-    text-align: center;
-    font-size: 24px;
-    font-weight: bold;
-    color: #ffd700;
-    margin-bottom: 20px;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-}
-
-.bonus-row {
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 15px;
-    padding: 15px;
-    margin-bottom: 20px;
-    border: 1px solid rgba(255, 215, 0, 0.1);
-}
-
-.bonus-header {
     font-size: 20px;
     font-weight: bold;
-    color: #ffd700;
-    margin-bottom: 15px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
 }
 
-.bonus-cards {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
+.balance {
+    font-size: 24px;
+    font-weight: bold;
+    background: rgba(255,255,255,0.2);
+    padding: 10px 20px;
+    border-radius: 50px;
+}
+
+/* Бонус секциясы (3 катар) */
+.bonus-section {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-bottom: 30px;
 }
 
 .bonus-card {
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 12px;
-    padding: 15px 10px;
-    text-align: center;
-    cursor: pointer;
-    transition: transform 0.3s;
-    border: 1px solid rgba(255, 215, 0, 0.1);
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 15px;
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    transition: transform 0.2s;
 }
 
 .bonus-card:hover {
-    transform: translateY(-3px);
-    border-color: #ffd700;
+    transform: translateY(-2px);
 }
 
-.bonus-card.disabled {
+.bonus-icon {
+    font-size: 40px;
+    min-width: 60px;
+    text-align: center;
+}
+
+.bonus-info {
+    flex: 1;
+}
+
+.bonus-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 5px;
+}
+
+.bonus-amount {
+    font-size: 14px;
+    color: #666;
+}
+
+.bonus-button {
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 15px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    min-width: 100px;
+}
+
+.bonus-button.small {
+    padding: 8px 15px;
+    font-size: 14px;
+    min-width: auto;
+}
+
+.bonus-button:hover {
+    opacity: 0.9;
+}
+
+.stars-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.stars-select {
+    padding: 8px;
+    border: 2px solid #e0e0e0;
+    border-radius: 10px;
+    font-size: 14px;
+    outline: none;
+}
+
+/* Тарифный план (звёзды) */
+.tariff-section {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    padding: 20px;
+    border-radius: 20px;
+    margin-bottom: 30px;
+    color: white;
+}
+
+.tariff-title {
+    font-size: 24px;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 20px;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+.tariff-cards {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.tariff-card {
+    flex: 1;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    padding: 15px;
+    border-radius: 15px;
+    text-align: center;
+}
+
+.tariff-stars {
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.tariff-name {
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+.tariff-status {
+    color: #4caf50;
+    font-weight: bold;
+}
+
+.tariff-button {
+    background: white;
+    color: #f5576c;
+    border: none;
+    padding: 8px 15px;
+    border-radius: 10px;
+    font-weight: bold;
+    cursor: pointer;
+    width: 100%;
+}
+
+.tariff-note {
+    font-size: 12px;
+    text-align: center;
+    opacity: 0.9;
+}
+
+/* Игры бөлүмү */
+.games-section {
+    background: white;
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.games-tabs {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.tab-button {
+    flex: 1;
+    padding: 10px;
+    background: #f0f0f0;
+    border: none;
+    border-radius: 10px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tab-button.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.game-container {
+    display: none;
+}
+
+.game-container.active {
+    display: block;
+}
+
+/* Краш оюну */
+.crash-header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.multiplier {
+    font-size: 48px;
+    font-weight: bold;
+    color: #333;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+}
+
+.plane-status {
+    font-size: 14px;
+    color: #666;
+}
+
+.crash-canvas-container {
+    position: relative;
+    width: 100%;
+    height: 200px;
+    background: linear-gradient(180deg, #87CEEB 0%, #FFE4B5 100%);
+    border-radius: 15px;
+    margin-bottom: 20px;
+    overflow: hidden;
+}
+
+#crashCanvas {
+    width: 100%;
+    height: 100%;
+}
+
+.plane-emoji {
+    position: absolute;
+    bottom: 30px;
+    left: 20px;
+    font-size: 40px;
+    transition: all 0.1s linear;
+}
+
+.bets-section {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 15px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.bets-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #333;
+}
+
+.bets-list {
+    font-size: 14px;
+}
+
+.bet-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.bet-item .player-name {
+    color: #667eea;
+}
+
+.bet-item .player-bet {
+    font-weight: bold;
+}
+
+.bet-item.cashed-out {
+    color: #4caf50;
+}
+
+.bet-controls {
+    display: flex;
+    gap: 10px;
+}
+
+.bet-input {
+    flex: 1;
+    padding: 12px;
+    border: 2px solid #e0e0e0;
+    border-radius: 10px;
+    font-size: 16px;
+    outline: none;
+}
+
+.bet-input:focus {
+    border-color: #667eea;
+}
+
+.bet-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.bet-button, .cashout-button {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 10px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.bet-button {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.cashout-button {
+    background: #4caf50;
+    color: white;
+}
+
+.cashout-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
 
-.bonus-amount {
-    font-size: 18px;
-    font-weight: bold;
-    color: #ffd700;
-    margin-bottom: 5px;
+/* Дурак оюну */
+.durak-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
 }
 
-.bonus-desc {
-    font-size: 12px;
-    color: #aaa;
+.durak-status {
+    font-size: 16px;
+    color: #666;
+}
+
+.durak-balance {
+    font-size: 18px;
+    font-weight: bold;
+    color: #667eea;
+}
+
+.cards-container {
+    min-height: 300px;
+    background: #2c3e50;
+    border-radius: 15px;
+    padding: 15px;
+    margin-bottom: 15px;
+    position: relative;
+}
+
+.opponent-cards, .player-cards {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.opponent-cards {
+    margin-bottom: 50px;
+}
+
+.table-cards {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin: 20px 0;
+    min-height: 60px;
+}
+
+.trump-card {
+    position: absolute;
+    top: 50%;
+    right: 20px;
+    transform: translateY(-50%);
+    font-size: 60px;
+    opacity: 0.3;
+}
+
+.card {
+    width: 50px;
+    height: 70px;
+    background: white;
+    border-radius: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 20px;
+    font-weight: bold;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+}
+
+.card.red {
+    color: #e74c3c;
+}
+
+.card.black {
+    color: #2c3e50;
+}
+
+.durak-controls {
+    display: flex;
+    gap: 10px;
+}
+
+.durak-button {
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+/* Турнир бөлүмү */
+.tournament-header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.tournament-title {
+    font-size: 24px;
+    font-weight: bold;
+    color: #333;
     margin-bottom: 10px;
 }
 
-.bonus-btn {
-    background: linear-gradient(135deg, #ffd700, #ffaa00);
+.tournament-prize {
+    font-size: 32px;
+    font-weight: bold;
+    color: #f39c12;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+}
+
+.tournament-stats {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 10px;
+}
+
+.stat-item {
+    text-align: center;
+}
+
+.stat-label {
+    display: block;
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 5px;
+}
+
+.stat-value {
+    font-size: 18px;
+    font-weight: bold;
+    color: #333;
+}
+
+.tournament-prizes {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    padding: 20px;
+    border-radius: 15px;
+    margin-bottom: 20px;
+    color: white;
+}
+
+.prize-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.prize-item {
+    font-size: 14px;
+}
+
+.tournament-button {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
     border: none;
-    color: #000;
-    padding: 8px 15px;
-    border-radius: 20px;
+    border-radius: 10px;
+    font-size: 18px;
     font-weight: bold;
     cursor: pointer;
-    width: 100%;
-    transition: all 0.3s;
+    margin-bottom: 10px;
 }
 
-.bonus-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 0 15px rgba(255, 215, 0, 0.5);
-}
-
-.bonus-footer {
+.tournament-note {
     text-align: center;
-    margin-top: 20px;
-    padding: 15px;
-    background: rgba(255, 215, 0, 0.1);
-    border-radius: 10px;
-    color: #ffd700;
+    font-size: 12px;
+    color: #666;
+}
+
+/* Профиль секциясы */
+.profile-section {
+    background: white;
+    border-radius: 20px;
+    padding: 20px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.profile-info {
+    margin-bottom: 15px;
+}
+
+.profile-name {
+    font-size: 20px;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 5px;
+}
+
+.profile-id {
     font-size: 14px;
+    color: #666;
 }
 
-.footer {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: rgba(0, 0, 0, 0.9);
-    padding: 15px;
-    border-top: 1px solid rgba(255, 215, 0, 0.2);
-}
-
-.footer-links {
+.nav-buttons {
     display: flex;
-    justify-content: center;
-    gap: 20px;
-    color: #ffd700;
-    font-size: 14px;
+    gap: 10px;
 }
+
+.nav-button {
+    flex: 1;
+    padding: 12px;
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.nav-button:hover {
+    background: #e0e0e0;
+}
+
+/* Анимациялар */
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+.shake {
+    animation: shake 0.3s ease-in-out;
+}
+
+@keyframes blink {
+    0%, 50%, 100% { opacity: 1; }
+    25%, 75% { opacity: 0.5; }
+}
+
+.blink {
+    animation: blink 1s infinite;
+}
+
+/* Адаптивдүүлүк */
+@media (max-width: 480px) {
+    .app-container {
+        padding: 10px;
+    }
+    
+    .bonus-card {
+        flex-wrap: wrap;
+    }
+    
+    .tariff-cards {
+        flex-direction: column;
+    }
+    
+    .bet-controls {
+        flex-direction: column;
+    }
+    
+    .bet-buttons {
+        flex-direction: column;
+    }
+    
+    .games-tabs {
+        flex-direction: column;
+    }
+}
+
+

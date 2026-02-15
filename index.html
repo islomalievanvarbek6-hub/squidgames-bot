@@ -4,238 +4,195 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>S ○ U I D G ▲ M [] S</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
-        body { background: linear-gradient(135deg, #0a0f1e 0%, #1a1f2f 100%); color: #fff; min-height: 100vh; }
-        .app-container { max-width: 600px; margin: 0 auto; padding: 20px; padding-bottom: 80px; }
-        .header { display: flex; justify-content: space-between; align-items: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 15px; margin-bottom: 20px; border: 1px solid rgba(255,215,0,0.2); }
-        .logo { font-size: 18px; font-weight: bold; color: #ffd700; text-shadow: 0 0 10px rgba(255,215,0,0.5); }
-        .user-info { font-size: 16px; }
-        .user-info span { color: #ffd700; font-weight: bold; margin: 0 5px; }
-        .tabs { display: flex; gap: 5px; margin-bottom: 20px; background: rgba(0,0,0,0.3); padding: 5px; border-radius: 10px; }
-        .tab-btn { flex: 1; padding: 12px; background: transparent; border: none; color: #888; font-weight: bold; cursor: pointer; border-radius: 8px; transition: all 0.3s; }
-        .tab-btn.active { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #000; box-shadow: 0 0 20px rgba(255,215,0,0.5); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .bonus-title { text-align: center; font-size: 24px; font-weight: bold; color: #ffd700; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 2px; }
-        .bonus-row { background: rgba(255,255,255,0.03); border-radius: 15px; padding: 15px; margin-bottom: 20px; border: 1px solid rgba(255,215,0,0.1); }
-        .bonus-header { font-size: 20px; font-weight: bold; color: #ffd700; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,215,0,0.2); }
-        .bonus-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-        .bonus-card { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 15px 10px; text-align: center; cursor: pointer; transition: transform 0.3s; border: 1px solid rgba(255,215,0,0.1); }
-        .bonus-card:hover { transform: translateY(-3px); border-color: #ffd700; }
-        .bonus-amount { font-size: 18px; font-weight: bold; color: #ffd700; margin-bottom: 5px; }
-        .bonus-desc { font-size: 12px; color: #aaa; margin-bottom: 10px; }
-        .bonus-btn { background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; color: #000; padding: 8px 15px; border-radius: 20px; font-weight: bold; cursor: pointer; width: 100%; transition: all 0.3s; }
-        .bonus-btn:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(255,215,0,0.5); }
-        .footer { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.9); padding: 15px; border-top: 1px solid rgba(255,215,0,0.2); }
-        .footer-links { display: flex; justify-content: center; gap: 20px; color: #ffd700; font-size: 14px; }
-    </style>
+    <link rel="stylesheet" href="style.css">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
     <div class="app-container">
+        <!-- Header -->
         <div class="header">
             <div class="logo">S ○ U I D G ▲ M [] S</div>
-            <div class="user-info">
-                <span id="userBalance">5000</span> 
-                <span id="userStars">0</span> ⭐
+            <div class="balance" id="balance">0 🪙</div>
+        </div>
+
+        <!-- Бонус системасы (3 катар) -->
+        <div class="bonus-section">
+            <div class="bonus-card" id="daily-bonus">
+                <div class="bonus-icon">🎁</div>
+                <div class="bonus-info">
+                    <div class="bonus-title">Ежедневный бонус</div>
+                    <div class="bonus-amount">4 000 - 15 000 🪙</div>
+                </div>
+                <button class="bonus-button" onclick="claimDailyBonus()">Получить</button>
             </div>
-        </div>
-
-        <div class="tabs">
-            <button class="tab-btn active" onclick="showTab('bonus')">БОНУС</button>
-            <button class="tab-btn" onclick="showTab('games')">ИГРЫ</button>
-            <button class="tab-btn" onclick="showTab('tournament')">ТУРНИР</button>
-        </div>
-
-        <!-- Bonus Tab -->
-        <div id="bonusTab" class="tab-content active">
-            <div class="bonus-title">БОНУСНАЯ СИСТЕМА</div>
             
-            <!-- Ряд 1: Бесплатный план -->
-            <div class="bonus-row">
-                <div class="bonus-header">0 ⭐</div>
-                <div class="bonus-cards">
-                    <div class="bonus-card" onclick="claimBonus(4000)">
-                        <div class="bonus-amount">4.000 🪙</div>
-                        <div class="bonus-desc">Ежедневно</div>
-                        <button class="bonus-btn" id="freeBonusBtn">ПОЛУЧИТЬ</button>
-                    </div>
-                    <div class="bonus-card disabled">
-                        <div class="bonus-amount">7.000 🪙</div>
-                        <div class="bonus-desc">Premium 1</div>
-                        <button class="bonus-btn" onclick="buyPremium(1)">699 ⭐</button>
-                    </div>
-                    <div class="bonus-card disabled">
-                        <div class="bonus-amount">15.000 🪙</div>
-                        <div class="bonus-desc">Premium 2</div>
-                        <button class="bonus-btn" onclick="buyPremium(2)">1.999 ⭐</button>
-                    </div>
+            <div class="bonus-card" id="stars-bonus">
+                <div class="bonus-icon">⭐</div>
+                <div class="bonus-info">
+                    <div class="bonus-title">Купить за звёзды</div>
+                    <div class="bonus-amount">Автоматически</div>
+                </div>
+                <div class="stars-selector">
+                    <select id="stars-amount" class="stars-select">
+                        <option value="10">10 ⭐ = 5 000 🪙</option>
+                        <option value="25">25 ⭐ = 12 500 🪙</option>
+                        <option value="50">50 ⭐ = 25 000 🪙</option>
+                        <option value="100">100 ⭐ = 50 000 🪙</option>
+                        <option value="250">250 ⭐ = 125 000 🪙</option>
+                        <option value="500">500 ⭐ = 250 000 🪙</option>
+                    </select>
+                    <button class="bonus-button small" onclick="buyWithStars()">Купить</button>
                 </div>
             </div>
-
-            <!-- Ряд 2: Premium 1 -->
-            <div class="bonus-row">
-                <div class="bonus-header">699 ⭐</div>
-                <div class="bonus-cards">
-                    <div class="bonus-card" onclick="claimPremiumBonus(7000)">
-                        <div class="bonus-amount">7.000 🪙</div>
-                        <div class="bonus-desc">Premium 1</div>
-                        <button class="bonus-btn" id="premium1BonusBtn">ПОЛУЧИТЬ</button>
-                    </div>
-                    <div class="bonus-card" onclick="buyStars(699)">
-                        <div class="bonus-amount">699 ⭐</div>
-                        <div class="bonus-desc">Купить звезды</div>
-                        <button class="bonus-btn">КУПИТЬ</button>
-                    </div>
+            
+            <div class="bonus-card" id="premium-bonus">
+                <div class="bonus-icon">💎</div>
+                <div class="bonus-info">
+                    <div class="bonus-title">Premium подписка</div>
+                    <div class="bonus-amount">100₽ / 200₽</div>
                 </div>
-            </div>
-
-            <!-- Ряд 3: Premium 2 -->
-            <div class="bonus-row">
-                <div class="bonus-header">1.999 ⭐</div>
-                <div class="bonus-cards">
-                    <div class="bonus-card" onclick="claimPremiumBonus(15000)">
-                        <div class="bonus-amount">15.000 🪙</div>
-                        <div class="bonus-desc">Premium 2</div>
-                        <button class="bonus-btn" id="premium2BonusBtn">ПОЛУЧИТЬ</button>
-                    </div>
-                    <div class="bonus-card" onclick="buyStars(1999)">
-                        <div class="bonus-amount">1.999 ⭐</div>
-                        <div class="bonus-desc">Купить звезды</div>
-                        <button class="bonus-btn">КУПИТЬ</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="bonus-footer">
-                <span>Приобрести тарифный план можно через @SQUIIDGAMES_KASSA</span>
+                <button class="bonus-button" onclick="window.open('https://t.me/SQUIIDGAMES_KASSA', '_blank')">Купить</button>
             </div>
         </div>
 
-        <!-- Games Tab -->
-        <div id="gamesTab" class="tab-content">
-            <div class="bonus-title">ИГРЫ</div>
-            <div class="bonus-row">
-                <div class="bonus-cards">
-                    <div class="bonus-card" onclick="playCrash()">
-                        <div class="bonus-amount">CRASH</div>
-                        <div class="bonus-desc">Самолет</div>
-                        <button class="bonus-btn">ИГРАТЬ</button>
+        <!-- Тарифный план (звёзды) - суроттогудай -->
+        <div class="tariff-section">
+            <div class="tariff-title">ТАРИФНЫЙ ПЛАН</div>
+            <div class="tariff-cards">
+                <div class="tariff-card">
+                    <div class="tariff-stars">0 ⭐</div>
+                    <div class="tariff-name">Бесплатный план</div>
+                    <div class="tariff-status">активен</div>
+                </div>
+                <div class="tariff-card">
+                    <div class="tariff-stars">699 ⭐</div>
+                    <div class="tariff-name">Стандартный план</div>
+                    <button class="tariff-button" onclick="buyTariff(699, 35000)">Купить</button>
+                </div>
+                <div class="tariff-card">
+                    <div class="tariff-stars">1999 ⭐</div>
+                    <div class="tariff-name">Премиум план</div>
+                    <button class="tariff-button" onclick="buyTariff(1999, 100000)">Купить</button>
+                </div>
+            </div>
+            <div class="tariff-note">Приобрести тарифный план можно так же по реквизитам через @SQUIIDGAMES_KASSA</div>
+        </div>
+
+        <!-- Игры бөлүмү -->
+        <div class="games-section">
+            <div class="games-tabs">
+                <button class="tab-button active" onclick="showGame('crash')">Краш</button>
+                <button class="tab-button" onclick="showGame('durak')">Дурак</button>
+                <button class="tab-button" onclick="showGame('tournament')">Турнир</button>
+            </div>
+
+            <!-- Краш оюну -->
+            <div id="crash-game" class="game-container active">
+                <div class="crash-header">
+                    <div class="multiplier" id="multiplier">1.00x</div>
+                    <div class="plane-status" id="plane-status">Ожидание ставок...</div>
+                </div>
+                
+                <div class="crash-canvas-container">
+                    <canvas id="crashCanvas" width="400" height="300"></canvas>
+                    <div class="plane-emoji" id="plane-emoji">✈️</div>
+                </div>
+                
+                <div class="bets-section">
+                    <div class="bets-title">Ставки игроков:</div>
+                    <div class="bets-list" id="bets-list">
+                        <!-- Ставкалар динамикалык түрдө кошулат -->
                     </div>
-                    <div class="bonus-card" onclick="playCards()">
-                        <div class="bonus-amount">ДУРАК</div>
-                        <div class="bonus-desc">Карты</div>
-                        <button class="bonus-btn">ИГРАТЬ</button>
-                    </div>
-                    <div class="bonus-card" onclick="playRoulette()">
-                        <div class="bonus-amount">РУЛЕТКА</div>
-                        <div class="bonus-desc">В боте</div>
-                        <button class="bonus-btn">В БОТЕ</button>
+                </div>
+                
+                <div class="bet-controls">
+                    <input type="number" id="bet-amount" class="bet-input" placeholder="Сумма ставки" min="1000" value="1000">
+                    <div class="bet-buttons">
+                        <button class="bet-button" onclick="placeCrashBet()">Сделать ставку</button>
+                        <button class="cashout-button" id="cashout-btn" onclick="cashout()" disabled>Забрать</button>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Tournament Tab -->
-        <div id="tournamentTab" class="tab-content">
-            <div class="bonus-title">ТУРНИР</div>
-            <div class="bonus-row">
-                <div class="bonus-cards">
-                    <div class="bonus-card">
-                        <div class="bonus-amount">150</div>
-                        <div class="bonus-desc">Игроков</div>
+            <!-- Дурак оюну -->
+            <div id="durak-game" class="game-container">
+                <div class="durak-header">
+                    <div class="durak-status" id="durak-status">Поиск игрока...</div>
+                    <div class="durak-balance" id="durak-balance">0 🪙</div>
+                </div>
+                
+                <div class="cards-container">
+                    <div class="opponent-cards" id="opponent-cards">
+                        <!-- Карты противника -->
                     </div>
-                    <div class="bonus-card">
-                        <div class="bonus-amount">650M</div>
-                        <div class="bonus-desc">Приз</div>
+                    
+                    <div class="table-cards" id="table-cards">
+                        <!-- Карты на столе -->
+                    </div>
+                    
+                    <div class="trump-card" id="trump-card">
+                        <!-- Козырь -->
+                    </div>
+                    
+                    <div class="player-cards" id="player-cards">
+                        <!-- Карты игрока -->
                     </div>
                 </div>
-                <button class="bonus-btn" style="margin-top:15px;" onclick="registerTournament()">УЧАСТВОВАТЬ</button>
+                
+                <div class="durak-controls">
+                    <input type="number" id="durak-bet" class="bet-input" placeholder="Ставка" value="1000" min="1000">
+                    <button class="durak-button" onclick="findDurakGame()">Найти игру</button>
+                </div>
+            </div>
+
+            <!-- Турнир бөлүмү -->
+            <div id="tournament-game" class="game-container">
+                <div class="tournament-header">
+                    <div class="tournament-title">Турнир на 150 человек</div>
+                    <div class="tournament-prize">650 000 000 🪙</div>
+                </div>
+                
+                <div class="tournament-stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Участников:</span>
+                        <span class="stat-value" id="tournament-count">0/150</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Начало:</span>
+                        <span class="stat-value" id="tournament-start">не начат</span>
+                    </div>
+                </div>
+                
+                <div class="tournament-prizes">
+                    <div class="prize-list">
+                        <div class="prize-item">🥇 1 место: 3 месяца Premium</div>
+                        <div class="prize-item">🥈 2 место: 100 000 000 🪙</div>
+                        <div class="prize-item">🥉 3 место: 90 000 000 🪙</div>
+                        <div class="prize-item">4 место: 80 000 000 🪙</div>
+                        <div class="prize-item">5 место: 70 000 000 🪙</div>
+                        <div class="prize-item">6-10 места: 50 000 000 🪙</div>
+                    </div>
+                </div>
+                
+                <button class="tournament-button" onclick="registerTournament()">Зарегистрироваться</button>
+                <div class="tournament-note">Только для Premium 2</div>
             </div>
         </div>
 
-        <!-- Footer -->
-        <div class="footer">
-            <div class="footer-links">
-                <span>@SQUIIDGAMES_BOT</span>
-                <span>|</span>
-                <span>@SQUIIDGAMES_KASSA</span>
+        <!-- Профиль жана навигация -->
+        <div class="profile-section">
+            <div class="profile-info">
+                <div class="profile-name" id="profile-name">Загрузка...</div>
+                <div class="profile-id" id="profile-id">ID: ...</div>
+            </div>
+            <div class="nav-buttons">
+                <button class="nav-button" onclick="openBot()">Профиль</button>
+                <button class="nav-button" onclick="openBot()">Главная</button>
+                <button class="nav-button" onclick="openBot()">Настройки</button>
             </div>
         </div>
     </div>
 
-    <script>
-        let tg = window.Telegram.WebApp;
-        tg.expand();
-        
-        let userData = {
-            balance: 5000,
-            stars: 0,
-            lastBonus: {}
-        };
-
-        function showTab(tabName) {
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-            
-            document.querySelector(`[onclick="showTab('${tabName}')"]`).classList.add('active');
-            document.getElementById(tabName + 'Tab').classList.add('active');
-        }
-
-        function claimBonus(amount) {
-            let today = new Date().toDateString();
-            
-            if(userData.lastBonus['free'] === today) {
-                tg.showAlert('❌ Бонус уже получен сегодня!');
-                return;
-            }
-            
-            userData.balance += amount;
-            userData.lastBonus['free'] = today;
-            
-            document.getElementById('userBalance').textContent = userData.balance;
-            
-            tg.sendData(JSON.stringify({
-                action: 'bonus',
-                amount: amount
-            }));
-            
-            tg.showAlert('✅ Бонус получен!');
-        }
-
-        function claimPremiumBonus(amount) {
-            tg.showAlert('❌ Требуется Premium подписка!');
-        }
-
-        function buyPremium(level) {
-            tg.openTelegramLink(`https://t.me/SQUIIDGAMES_KASSA?start=premium_${level}`);
-        }
-
-        function buyStars(amount) {
-            tg.openTelegramLink(`https://t.me/SQUIIDGAMES_KASSA?start=buy_stars_${amount}`);
-        }
-
-        function playCrash() {
-            tg.showAlert('🎮 Crash игра скоро будет доступна!');
-        }
-
-        function playCards() {
-            tg.showAlert('🎮 Дурак игра скоро будет доступна!');
-        }
-
-        function playRoulette() {
-            tg.showAlert('🎰 Рулетка доступна в боте!');
-        }
-
-        function registerTournament() {
-            tg.showAlert('🏆 Требуется Premium 2 для участия!');
-        }
-
-        // Telegram'dan келген маалыматтарды алуу
-        tg.onEvent('mainButtonClicked', function() {
-            tg.close();
-        });
-    </script>
+    <script src="script.js"></script>
 </body>
 </html>
