@@ -5,13 +5,14 @@ import os
 import random
 import sqlite3
 import asyncio
-import json  # <--- УШУЛ САТЫРДЫ КОШУҢУЗ
+import json
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ChatMember
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ChatMember, WebAppInfo
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import logging
 import re
 from collections import defaultdict
+import time
 
 # ============ КОНФИГУРАЦИЯ ============
 BOT_TOKEN = "8586410588:AAEZmz9upT7ifgdzUETb_6ayl1mC3zPwA5c"  # СИЗДИН ТОКЕНИҢИЗ
@@ -31,7 +32,10 @@ TRANSFER_COOLDOWN_HOURS = 6
 TRANSFER_DAILY_LIMIT = 10000
 
 # GIF интернеттен алабыз (ишенимдүү вариант)
-GIF_URL = "https://i.imgur.com/4WXT5zF.gif"
+GIF_URL = "https://islomav4.beget.tech/giphy.mp4"
+
+# Mini App URL (GitHub Pages)
+MINI_APP_URL = "https://islomalievanvarbek6-hub.github.io/squidgames-bot/"
 # ========================================
 
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +50,7 @@ class ChatManager:
         self.last_bet_amounts = defaultdict(dict)
         self.last_bet_types = defaultdict(dict)
         self.last_bets_details = defaultdict(dict)
+        self.last_game_bets = defaultdict(dict)  # Акыркы оюндагы ставкаларды сактоо
         self.go_tasks = {}
         self.user_bets = defaultdict(list)
         self.chat_members_cache = defaultdict(dict)
@@ -58,9 +63,26 @@ class ChatManager:
         self.tournament_start_time = None
         self.last_activity = defaultdict(float)  # Активдүүлүк убактысы
         self.roulette_started = defaultdict(bool)  # Рулетка башталдыбы
+        
+        # Crash game үчүн
+        self.crash_games = defaultdict(dict)  # chat_id -> game data
+        self.crash_bets = defaultdict(dict)   # chat_id -> {user_id: amount}
+        self.crash_multiplier = defaultdict(float)
+        self.crash_running = defaultdict(bool)
+        self.crash_cashed_out = defaultdict(set)  # Кимдер забрал кылды
+        self.crash_task = {}
+        
+        # Дурак оюну үчүн
+        self.durak_games = defaultdict(dict)  # {chat_id: {game_id, players, status}}
 
     def reset_chat_roulette(self, chat_id):
         if chat_id in self.roulette_bets:
+            # Акыркы оюндун ставкаларын сактап калуу
+            if chat_id in self.roulette_bets and self.roulette_bets[chat_id]:
+                self.last_game_bets[chat_id] = {}
+                for user_id, bets in self.roulette_bets[chat_id].items():
+                    self.last_game_bets[chat_id][user_id] = bets.copy()
+            
             del self.roulette_bets[chat_id]
         if chat_id in self.last_bet_amounts:
             del self.last_bet_amounts[chat_id]
@@ -70,8 +92,6 @@ class ChatManager:
             del self.next_roulette_result[chat_id]
         if chat_id in self.user_bets:
             del self.user_bets[chat_id]
-        if chat_id in self.last_bets_details:
-            del self.last_bets_details[chat_id]
 
     def add_tournament_participant(self, user_id, username):
         if user_id not in self.tournament_participants:
@@ -131,7 +151,8 @@ def init_db():
             daily_bonus_count INTEGER DEFAULT 0,
             premium_type INTEGER DEFAULT 0,
             premium_expires TIMESTAMP,
-            tournament_wins INTEGER DEFAULT 0
+            tournament_wins INTEGER DEFAULT 0,
+            stars_balance INTEGER DEFAULT 0  -- Telegram жылдызчалары
         )
     ''')
 
@@ -321,6 +342,29 @@ def init_db():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mini_app_bonus (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            bonus_date DATE,
+            bonus_amount INTEGER,
+            bonus_type TEXT,  -- 'free', 'stars', 'premium'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS crash_game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            bet_amount INTEGER,
+            multiplier REAL,
+            win_amount INTEGER,
+            cashed_out BOOLEAN,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
     logger.info("База данных инициализирована")
@@ -354,12 +398,12 @@ class UserManager:
             (user_id, username, first_name, referral_code, balance, display_name,
              roulette_limit, daily_transfer_used, last_daily_reset, transfer_limit, added_users,
              is_muted, mute_until, mute_by, can_mute, can_ban, last_rodnoy_bonus_date, daily_bonus_count,
-             premium_type, premium_expires, tournament_wins)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             premium_type, premium_expires, tournament_wins, stars_balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, username, first_name, f"ref_{user_id}", INITIAL_BALANCE, first_name,
              ROULETTE_LIMIT, 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), TRANSFER_DAILY_LIMIT, 0,
              0, None, None, 0, 0, datetime.now().date().strftime("%Y-%m-%d"), 0,
-             0, None, 0)
+             0, None, 0, 0)
         )
 
         if referrer_id:
@@ -403,6 +447,9 @@ class UserManager:
 
         conn.commit()
         conn.close()
+        
+        # Баланс өзгөргөндүгү жөнүндө билдирүү (Mini App үчүн)
+        return True
 
     @staticmethod
     def get_rodnoy_bonus_info(user_id):
@@ -1089,6 +1136,139 @@ class UserManager:
 
         conn.commit()
         conn.close()
+        
+    # ============ Mini App үчүн кошумча методдор ============
+    
+    @staticmethod
+    def get_user_balance(user_id):
+        """Колдонуучунун балансын алуу (Mini App үчүн)"""
+        user = UserManager.get_user(user_id)
+        if user:
+            return user[3]  # balance
+        return 0
+    
+    @staticmethod
+    def add_mini_app_bonus(user_id, amount, bonus_type):
+        """Mini App'тан бонус кошуу"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        today = datetime.now().date()
+        
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        
+        cursor.execute(
+            "INSERT INTO mini_app_bonus (user_id, bonus_date, bonus_amount, bonus_type) VALUES (?, ?, ?, ?)",
+            (user_id, today.strftime("%Y-%m-%d"), amount, bonus_type)
+        )
+        
+        cursor.execute(
+            "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
+            (user_id, amount, "bonus", f"Бонус из Mini App: {bonus_type}")
+        )
+        
+        conn.commit()
+        conn.close()
+        return True
+    
+    @staticmethod
+    def get_daily_bonus_status(user_id):
+        """Күндүк бонусту текшерүү (Mini App үчүн)"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        today = datetime.now().date()
+        
+        cursor.execute("SELECT bonus_date FROM mini_app_bonus WHERE user_id = ? AND bonus_type = 'free' AND bonus_date = ?", 
+                      (user_id, today.strftime("%Y-%m-%d")))
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result is None  # True - бонус ала алат, False - бүгүн алган
+    
+    @staticmethod
+    def get_stars_balance(user_id):
+        """Колдонуучунун жылдызчаларын алуу"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT stars_balance FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result[0] if result else 0
+    
+    @staticmethod
+    def add_stars(user_id, amount):
+        """Жылдызча кошуу (Telegram Stars)"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET stars_balance = stars_balance + ? WHERE user_id = ?", (amount, user_id))
+        conn.commit()
+        conn.close()
+        
+    @staticmethod
+    def process_stars_payment(user_id, stars_amount, coin_amount):
+        """Жылдызча менен төлөө (автоматтык)"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT stars_balance FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        
+        if not result or result[0] < stars_amount:
+            conn.close()
+            return False, "Недостаточно звёзд"
+        
+        cursor.execute("UPDATE users SET stars_balance = stars_balance - ?, balance = balance + ? WHERE user_id = ?", 
+                      (stars_amount, coin_amount, user_id))
+        
+        cursor.execute(
+            "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
+            (user_id, coin_amount, "stars_purchase", f"Покупка монет за {stars_amount} звёзд")
+        )
+        
+        conn.commit()
+        conn.close()
+        return True, coin_amount
+    
+    @staticmethod
+    def process_crash_game_bet(user_id, chat_id, amount):
+        """Crash game ставкасын иштетүү"""
+        user = UserManager.get_user(user_id)
+        if not user or user[3] < amount:
+            return False, "Недостаточно монет"
+        
+        UserManager.update_balance(user_id, -amount, f"Ставка в Crash Game: -{amount}")
+        return True, amount
+    
+    @staticmethod
+    def process_crash_game_win(user_id, chat_id, bet_amount, multiplier):
+        """Crash game утушун иштетүү"""
+        win_amount = int(bet_amount * multiplier)
+        UserManager.update_balance(user_id, win_amount, f"Выигрыш в Crash Game: +{win_amount} (x{multiplier})")
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO crash_game_history (user_id, bet_amount, multiplier, win_amount, cashed_out) VALUES (?, ?, ?, ?, 1)",
+            (user_id, bet_amount, multiplier, win_amount)
+        )
+        conn.commit()
+        conn.close()
+        
+        return win_amount
+    
+    @staticmethod
+    def process_crash_game_loss(user_id, chat_id, bet_amount):
+        """Crash game утушун иштетүү"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO crash_game_history (user_id, bet_amount, multiplier, win_amount, cashed_out) VALUES (?, ?, ?, ?, 0)",
+            (user_id, bet_amount, 0, 0)
+        )
+        conn.commit()
+        conn.close()
+        
+        return True
 
 chat_manager = ChatManager()
 
@@ -1201,11 +1381,10 @@ async def show_rodnoy_main_menu(update: Update, context: ContextTypes.DEFAULT_TY
         UserManager.create_user(user_id, username, first_name, None)
         user = UserManager.get_user(user_id)
 
+    # Mini App кнопкасы менен
     keyboard = [
-        [InlineKeyboardButton("🏠 ГЛАВНАЯ", callback_data="rodnoy_home")],
+        [InlineKeyboardButton("🎮 ИГРЫ (Mini App)", web_app=WebAppInfo(url=MINI_APP_URL))],
         [InlineKeyboardButton("💰 БАЛАНС", callback_data="rodnoy_balance_page")],
-        [InlineKeyboardButton("🎰 ИГРЫ", callback_data="rodnoy_games")],
-        [InlineKeyboardButton("🎭 РОЛИ", callback_data="rodnoy_roles")],
         [InlineKeyboardButton("🎁 БОНУС", callback_data="rodnoy_bonus_page")],
         [InlineKeyboardButton("🏆 РЕЙТИНГ", callback_data="rodnoy_rating")],
         [InlineKeyboardButton("⚙️ НАСТРОЙКИ", callback_data="rodnoy_settings")],
@@ -1224,7 +1403,8 @@ async def show_rodnoy_main_menu(update: Update, context: ContextTypes.DEFAULT_TY
         f"#𝗦 ○ U I D G ▲ M [] S\n\n"
         f"👤 {display_name}\n"
         f"🆔 ID: {user_id}\n"
-        f"💰 Баланс: {user[3]} 🪙\n\n"
+        f"💰 Баланс: {user[3]} 🪙\n"
+        f"⭐ Звёзды: {user[30] if len(user) > 30 else 0}\n\n"
         f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
         f"👇 Нажмите кнопку для управления:"
     )
@@ -1234,94 +1414,294 @@ async def show_rodnoy_main_menu(update: Update, context: ContextTypes.DEFAULT_TY
     elif update.callback_query:
         await update.callback_query.message.edit_text(menu_text, reply_markup=reply_markup)
 
-async def show_rodnoy_balance_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.callback_query.from_user.id
-    user = UserManager.get_user(user_id)
-
-    if not user:
+async function rodnoy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ['group', 'supergroup']:
         return
 
-    keyboard = [
-        [InlineKeyboardButton("💳 Пополнить баланс", url=DONATE_LINK)],
-        [InlineKeyboardButton("📊 Статистика", callback_data="rodnoy_stats")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="rodnoy_main_menu")]
-    ]
+    user_id = update.effective_user.id
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if UserManager.is_blocked(user_id):
+        return
 
-    balance_text = (
-        f"#𝗦 ○ U I D G ▲ M [] S\n\n"
-        f"## БАЛАНС\n\n"
-        f"1. **𝗦 ○ U I D G ▲ M [] S Coins**\n"
-        f"   {user[3]} 🪙\n\n"
-        f"2. Пополнить баланс\n"
-        f"3. Подписки\n\n"
-        f"💰 Доступно: {user[3]} 🪙\n"
-        f"💳 Для пополнения нажмите кнопку ниже:"
+    username = update.effective_user.username
+    first_name = update.effective_user.first_name
+
+    UserManager.create_user(user_id, username, first_name, None)
+
+    welcome_text = (
+        f"👋 Привет, {first_name}!\n\n"
+        f"✨ **🏠 𝗦 ○ U I D G ▲ M [] S** запущен!\n\n"
+        f"👇 Используйте кнопки ниже или напишите /SKUID."
     )
 
-    await update.callback_query.message.edit_text(balance_text, reply_markup=reply_markup)
-
-async def show_rodnoy_bonus_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.callback_query.from_user.id
-    user = UserManager.get_user(user_id)
-
-    if not user:
-        return
-
-    premium_info = UserManager.get_premium_info(user_id)
-    premium_type = premium_info[0] if premium_info else 0
-    premium_expires = premium_info[1] if premium_info else None
-
-    today = datetime.now().date()
-
-    bonus_data = UserManager.get_rodnoy_bonus_info(user_id)
-    daily_bonus_taken = False
-
-    if bonus_data and bonus_data[0]:
-        last_date = datetime.strptime(bonus_data[0], "%Y-%m-%d").date()
-        if last_date == today:
-            daily_bonus_taken = True
-
     keyboard = [
-        [InlineKeyboardButton("🎁 Ежедневный бонус 10.000", callback_data="daily_bonus")],
-        [InlineKeyboardButton("💰 Premium 1 (100 руб/30 дней)", callback_data="premium_1_info")],
-        [InlineKeyboardButton("💎 Premium 2 (200 руб/30 дней)", callback_data="premium_2_info")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="rodnoy_main_menu")]
+        [KeyboardButton("🏠 𝗦 ○ U I D G ▲ M [] S")],
+        [KeyboardButton("🎁 Бонус"), KeyboardButton("💰 Пополнить баланс")],
+        [KeyboardButton("❓ Помощь")]
     ]
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+    await update.effective_chat.send_message(welcome_text, reply_markup=reply_markup)
+
+# ============ Crash Game функциялары (Mini App үчүн) ============
+
+async def start_crash_game(chat_id):
+    """Crash game баштоо"""
+    if chat_manager.crash_running.get(chat_id, False):
+        return False
+    
+    chat_manager.crash_running[chat_id] = True
+    chat_manager.crash_multiplier[chat_id] = 1.0
+    chat_manager.crash_cashed_out[chat_id] = set()
+    
+    # 10 секунд күтүү (ставкалар үчүн)
+    await asyncio.sleep(10)
+    
+    # Эгер эч ким ставка койбосо, токтотуу
+    if chat_id not in chat_manager.crash_bets or not chat_manager.crash_bets[chat_id]:
+        chat_manager.crash_running[chat_id] = False
+        return False
+    
+    # Оюнду баштоо
+    await run_crash_game(chat_id)
+    return True
+
+async def run_crash_game(chat_id):
+    """Crash game негизги логикасы"""
+    multiplier = 1.0
+    crash_point = random.uniform(1.1, 10.0)  # 1.1x - 10x арасында жарылуу
+    
+    start_time = time.time()
+    
+    while multiplier < crash_point:
+        if not chat_manager.crash_running.get(chat_id, False):
+            break
+        
+        # Ар бир 0.1 секунд сайын көбөйтүү
+        await asyncio.sleep(0.1)
+        multiplier += 0.05
+        chat_manager.crash_multiplier[chat_id] = multiplier
+    
+    # Жарылуу
+    chat_manager.crash_running[chat_id] = False
+    
+    # Жарылганда кимдер калды
+    if chat_id in chat_manager.crash_bets:
+        for user_id, amount in chat_manager.crash_bets[chat_id].items():
+            if user_id not in chat_manager.crash_cashed_out[chat_id]:
+                # Жарылды, утуш жок
+                UserManager.process_crash_game_loss(user_id, chat_id, amount)
+    
+    # Ставкаларды тазалоо
+    if chat_id in chat_manager.crash_bets:
+        del chat_manager.crash_bets[chat_id]
+    if chat_id in chat_manager.crash_cashed_out:
+        del chat_manager.crash_cashed_out[chat_id]
+    
+    # Кийинки оюнду баштоо
+    asyncio.create_task(start_crash_game(chat_id))
+
+async def handle_crash_bet(user_id, chat_id, amount):
+    """Crash game ставка коюу"""
+    if not chat_manager.crash_running.get(chat_id, False):
+        return False, "Игра не запущена"
+    
+    if chat_manager.crash_multiplier.get(chat_id, 1.0) > 1.1:
+        return False, "Ставки принимаются только до начала игры"
+    
+    success, result = UserManager.process_crash_game_bet(user_id, chat_id, amount)
+    if not success:
+        return False, result
+    
+    if chat_id not in chat_manager.crash_bets:
+        chat_manager.crash_bets[chat_id] = {}
+    
+    if user_id in chat_manager.crash_bets[chat_id]:
+        chat_manager.crash_bets[chat_id][user_id] += amount
+    else:
+        chat_manager.crash_bets[chat_id][user_id] = amount
+    
+    return True, amount
+
+async function handle_crash_cashout(user_id, chat_id):
+    """Crash game забрать кылуу"""
+    if not chat_manager.crash_running.get(chat_id, False):
+        return False, "Игра не запущена"
+    
+    if user_id in chat_manager.crash_cashed_out[chat_id]:
+        return False, "Вы уже забрали"
+    
+    if chat_id not in chat_manager.crash_bets or user_id not in chat_manager.crash_bets[chat_id]:
+        return False, "У вас нет ставки"
+    
+    bet_amount = chat_manager.crash_bets[chat_id][user_id]
+    multiplier = chat_manager.crash_multiplier[chat_id]
+    
+    win_amount = UserManager.process_crash_game_win(user_id, chat_id, bet_amount, multiplier)
+    
+    chat_manager.crash_cashed_out[chat_id].add(user_id)
+    
+    return True, win_amount
+
+# ============ Mini App API эндпоинттери ============
+
+async def mini_app_api(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mini App'тан келген сурамдарды иштетүү"""
+    if not update.message or not update.message.web_app_data:
+        return
+    
+    user_id = update.effective_user.id
+    data = json.loads(update.message.web_app_data.data)
+    action = data.get('action')
+    
+    if action == 'get_user':
+        user = UserManager.get_user(user_id)
+        if user:
+            response = {
+                'user_id': user_id,
+                'display_name': user[15] or user[2] or user[1],
+                'balance': user[3],
+                'stars': user[30] if len(user) > 30 else 0,
+                'premium_type': user[27] if len(user) > 27 else 0
+            }
+            await update.message.reply_text(json.dumps(response))
+    
+    elif action == 'get_daily_bonus':
+        can_claim = UserManager.get_daily_bonus_status(user_id)
+        await update.message.reply_text(json.dumps({'can_claim': can_claim}))
+    
+    elif action == 'claim_daily_bonus':
+        can_claim = UserManager.get_daily_bonus_status(user_id)
+        if can_claim:
+            # Кокустук бонус (4000, 7000, 15000)
+            bonus = random.choice([4000, 7000, 15000])
+            UserManager.add_mini_app_bonus(user_id, bonus, 'free')
+            await update.message.reply_text(json.dumps({'success': True, 'bonus': bonus}))
+        else:
+            await update.message.reply_text(json.dumps({'success': False, 'error': 'Already claimed'}))
+    
+    elif action == 'buy_with_stars':
+        stars = data.get('stars', 0)
+        coins = data.get('coins', 0)
+        success, result = UserManager.process_stars_payment(user_id, stars, coins)
+        if success:
+            await update.message.reply_text(json.dumps({'success': True, 'coins': result}))
+        else:
+            await update.message.reply_text(json.dumps({'success': False, 'error': result}))
+    
+    elif action == 'crash_bet':
+        amount = data.get('amount', 0)
+        chat_id = update.effective_chat.id
+        success, result = await handle_crash_bet(user_id, chat_id, amount)
+        await update.message.reply_text(json.dumps({'success': success, 'result': str(result)}))
+    
+    elif action == 'crash_cashout':
+        chat_id = update.effective_chat.id
+        success, result = await handle_crash_cashout(user_id, chat_id)
+        await update.message.reply_text(json.dumps({'success': success, 'result': str(result)}))
+    
+    elif action == 'crash_status':
+        chat_id = update.effective_chat.id
+        status = {
+            'running': chat_manager.crash_running.get(chat_id, False),
+            'multiplier': chat_manager.crash_multiplier.get(chat_id, 1.0),
+            'bets': {}
+        }
+        
+        if chat_id in chat_manager.crash_bets:
+            for uid, amount in chat_manager.crash_bets[chat_id].items():
+                user = UserManager.get_user(uid)
+                if user:
+                    name = user[15] or user[2] or str(uid)
+                    status['bets'][uid] = {
+                        'name': name,
+                        'amount': amount,
+                        'cashed_out': uid in chat_manager.crash_cashed_out.get(chat_id, set())
+                    }
+        
+        await update.message.reply_text(json.dumps(status))
+
+# ============ Башка функциялар ============
+
+async def handle_rodnoy_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+
+    if data == "rodnoy_main_menu":
+        await show_rodnoy_main_menu(update, context)
+
+    elif data == "rodnoy_balance_page":
+        await show_rodnoy_balance_page(update, context)
+
+    elif data == "rodnoy_bonus_page":
+        await show_rodnoy_bonus_page(update, context)
+
+    elif data == "daily_bonus":
+        await handle_daily_bonus(update, context)
+
+    elif data == "premium_1_info":
+        await handle_premium_1_info(update, context)
+
+    elif data == "premium_2_info":
+        await handle_premium_2_info(update, context)
+
+    elif data == "rodnoy_games":
+        await show_rodnoy_games_menu(update, context)
+
+    elif data == "rodnoy_roles":
+        await show_rodnoy_roles_menu(update, context)
+
+    elif data == "rodnoy_rating":
+        await show_rodnoy_rating_page(update, context)
+
+    elif data == "rodnoy_settings":
+        await show_rodnoy_settings(update, context)
+
+    elif data == "rodnoy_buy_thief":
+        await handle_rodnoy_buy_thief(update, context)
+
+    elif data == "rodnoy_buy_police":
+        await handle_rodnoy_buy_police(update, context)
+
+    elif data == "rodnoy_roulette_game":
+        await Games.ruleka(update, context)
+
+    elif data == "rodnoy_bandit_game":
+        await Games.banditka(update, context)
+
+async function handle_rodnoy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ['group', 'supergroup']:
+        return
+    await show_rodnoy_main_menu(update, context)
+
+async function handle_bonus_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ['group', 'supergroup']:
+        return
+    
+    # Mini App аркылуу бонус алуу
+    keyboard = [
+        [InlineKeyboardButton("🎁 Получить бонус в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
+        [InlineKeyboardButton("◀️ Назад", callback_data="rodnoy_main_menu")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     bonus_text = (
         f"#𝗦 ○ U I D G ▲ M [] S\n\n"
-        f"## БОНУСНАЯ СИСТЕМА\n\n"
+        f"## 🎁 БОНУСНАЯ СИСТЕМА\n\n"
+        f"👇 Нажмите кнопку, чтобы открыть Mini App и получить бонус:\n\n"
+        f"🎁 **Ежедневный бонус** - от 4 000 до 15 000 монет\n"
+        f"⭐ **Покупка за звёзды** - автоматическая покупка\n"
+        f"💰 **Premium подписка** - у админа @SQUIIDGAMES_KASSA"
     )
+    
+    await update.effective_chat.send_message(bonus_text, reply_markup=reply_markup)
 
-    if premium_type > 0:
-        expires_date = datetime.strptime(premium_expires, "%Y-%m-%d %H:%M:%S") if premium_expires else None
-        days_left = (expires_date.date() - today).days if expires_date and expires_date.date() > today else 0
-        bonus_text += f"✅ Активен Premium {premium_type}\n"
-        bonus_text += f"⏳ Осталось дней: {days_left}\n\n"
-
-    bonus_text += (
-        f"🎁 **Ежедневный бонус**\n"
-        f"   • 10.000 монет каждый день\n"
-        f"   • Доступен всем пользователям\n"
-        f"   • Сегодня: {'✅ Получено' if daily_bonus_taken else '🔄 Доступно'}\n\n"
-        f"💰 **Premium 1 (100 руб)**\n"
-        f"   • 20.000 монет ежедневно\n"
-        f"   • Срок: 30 дней\n"
-        f"   • Бонус при активации: 10.000\n\n"
-        f"💎 **Premium 2 (200 руб)**\n"
-        f"   • 50.000 монет ежедневно\n"
-        f"   • Срок: 30 дней\n"
-        f"   • Бонус при активации: 20.000\n\n"
-        f"👇 Выберите бонус:"
-    )
-
-    await update.callback_query.message.edit_text(bonus_text, reply_markup=reply_markup)
-
-async def handle_daily_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_daily_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Эски бонус функциясы (боттон)
     user_id = update.callback_query.from_user.id
     user = UserManager.get_user(user_id)
 
@@ -1361,7 +1741,7 @@ async def handle_daily_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.callback_query.message.edit_text(bonus_text, reply_markup=reply_markup)
     await update.callback_query.answer(f"🎁 +{bonus_amount} монет получено!")
 
-async def handle_premium_1_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_premium_1_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.callback_query.from_user.id
 
     keyboard = [
@@ -1390,7 +1770,7 @@ async def handle_premium_1_info(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.callback_query.message.edit_text(premium_text, reply_markup=reply_markup)
 
-async def handle_premium_2_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_premium_2_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.callback_query.from_user.id
 
     keyboard = [
@@ -1420,7 +1800,7 @@ async def handle_premium_2_info(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.callback_query.message.edit_text(premium_text, reply_markup=reply_markup)
 
-async def show_rodnoy_roles_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function show_rodnoy_roles_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.callback_query.from_user.id
 
     role_data = UserManager.get_user_role(user_id)
@@ -1460,7 +1840,7 @@ async def show_rodnoy_roles_menu(update: Update, context: ContextTypes.DEFAULT_T
 
     await update.callback_query.message.edit_text(roles_text, reply_markup=reply_markup)
 
-async def handle_rodnoy_buy_thief(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_rodnoy_buy_thief(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.callback_query.from_user.id
 
     keyboard = [
@@ -1490,7 +1870,7 @@ async def handle_rodnoy_buy_thief(update: Update, context: ContextTypes.DEFAULT_
 
     await update.callback_query.message.edit_text(thief_text, reply_markup=reply_markup)
 
-async def handle_rodnoy_buy_police(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_rodnoy_buy_police(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.callback_query.from_user.id
 
     keyboard = [
@@ -1520,7 +1900,7 @@ async def handle_rodnoy_buy_police(update: Update, context: ContextTypes.DEFAULT
 
     await update.callback_query.message.edit_text(police_text, reply_markup=reply_markup)
 
-async def show_rodnoy_rating_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function show_rodnoy_rating_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.callback_query.from_user.id
     user = UserManager.get_user(user_id)
 
@@ -1565,7 +1945,7 @@ async def show_rodnoy_rating_page(update: Update, context: ContextTypes.DEFAULT_
 
     await update.callback_query.message.edit_text(rating_text, reply_markup=reply_markup)
 
-async def show_rodnoy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function show_rodnoy_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("👤 Профиль", callback_data="rodnoy_profile_settings")],
         [InlineKeyboardButton("🔔 Уведомления", callback_data="rodnoy_notifications")],
@@ -1589,10 +1969,11 @@ async def show_rodnoy_settings(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.callback_query.message.edit_text(settings_text, reply_markup=reply_markup)
 
-async def show_rodnoy_games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function show_rodnoy_games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎰 Рулетка", callback_data="rodnoy_roulette_game")],
         [InlineKeyboardButton("🎴 Бандит", callback_data="rodnoy_bandit_game")],
+        [InlineKeyboardButton("🎮 Игры в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
         [InlineKeyboardButton("◀️ Назад", callback_data="rodnoy_main_menu")]
     ]
 
@@ -1603,13 +1984,14 @@ async def show_rodnoy_games_menu(update: Update, context: ContextTypes.DEFAULT_T
         f"## 🎮 ИГРЫ\n\n"
         f"👇 Играть в игры:\n\n"
         f"🎰 **Рулетка** - угадайте число или цвет\n"
-        f"🎴 **Бандит** - соберите одинаковые символы\n\n"
+        f"🎴 **Бандит** - соберите одинаковые символы\n"
+        f"🎮 **Mini App** - Crash Game, Дурак и другие игры\n\n"
         f"🏆 Участвуйте и выигрывайте призы!"
     )
 
     await update.callback_query.message.edit_text(games_text, reply_markup=reply_markup)
 
-async def handle_thief_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_thief_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     role_data = UserManager.get_user_role(user_id)
@@ -1686,7 +2068,7 @@ async def handle_thief_steal(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode='HTML'
     )
 
-async def handle_police_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_police_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     role_data = UserManager.get_user_role(user_id)
@@ -1710,7 +2092,7 @@ async def handle_police_protect(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode='HTML'
     )
 
-async def handle_text_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_text_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -1752,7 +2134,7 @@ async def handle_text_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
-async def handle_text_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_text_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -1785,7 +2167,7 @@ async def handle_text_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode='HTML'
     )
 
-async def handle_text_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_text_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -1836,7 +2218,7 @@ async def handle_text_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
-async def handle_text_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_text_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -1877,7 +2259,7 @@ async def handle_text_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
-async def handle_mute_list_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_mute_list_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -1929,7 +2311,7 @@ async def handle_mute_list_text(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.effective_chat.send_message(mute_list_text, parse_mode='HTML')
 
-async def handle_ban_list_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_ban_list_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -1982,7 +2364,7 @@ async def handle_ban_list_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.effective_chat.send_message(ban_list_text, parse_mode='HTML')
 
-async def handle_mutdan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_mutdan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -2034,7 +2416,7 @@ async def handle_mutdan_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.effective_chat.send_message(mute_list_text, parse_mode='HTML')
 
-async def handle_bandan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_bandan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -2087,7 +2469,7 @@ async def handle_bandan_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.effective_chat.send_message(ban_list_text, parse_mode='HTML')
 
-async def handle_razmut_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_razmut_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -2146,7 +2528,7 @@ async def handle_razmut_username(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='HTML'
     )
 
-async def handle_razban_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_razban_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -2213,7 +2595,7 @@ async def handle_razban_username(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='HTML'
     )
 
-async def handle_dai_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_dai_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -2272,7 +2654,7 @@ async def handle_dai_admin_command(update: Update, context: ContextTypes.DEFAULT
         parse_mode='HTML'
     )
 
-async def handle_uberi_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_uberi_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2326,7 +2708,7 @@ async def handle_uberi_admin_command(update: Update, context: ContextTypes.DEFAU
         parse_mode='HTML'
     )
 
-async def handle_tournament_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_tournament_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = UserManager.get_user(user_id)
 
@@ -2358,7 +2740,7 @@ async def handle_tournament_register(update: Update, context: ContextTypes.DEFAU
         f"💰 Призовой фонд: 650.000.000 🪙"
     )
 
-async def handle_tournament_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_tournament_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2393,7 +2775,7 @@ async def handle_tournament_start(update: Update, context: ContextTypes.DEFAULT_
 
     await finish_tournament(context)
 
-async def finish_tournament(context: ContextTypes.DEFAULT_TYPE):
+async function finish_tournament(context: ContextTypes.DEFAULT_TYPE):
     if not chat_manager.tournament_active:
         return
 
@@ -2456,7 +2838,7 @@ async def finish_tournament(context: ContextTypes.DEFAULT_TYPE):
 
     chat_manager.tournament_active = False
 
-async def handle_tournament_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_tournament_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     participants = UserManager.get_tournament_registrations()
 
     status_text = "🏆 **СТАТУС ТУРНИРА**\n\n"
@@ -2490,7 +2872,7 @@ async def handle_tournament_status(update: Update, context: ContextTypes.DEFAULT
 
     await update.effective_chat.send_message(status_text)
 
-async def handle_give_role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_give_role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2569,7 +2951,7 @@ async def handle_give_role_command(update: Update, context: ContextTypes.DEFAULT
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат! Введите числа правильно.")
 
-async def handle_remove_role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_remove_role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2623,7 +3005,7 @@ async def handle_remove_role_command(update: Update, context: ContextTypes.DEFAU
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат!")
 
-async def handle_check_roles_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_check_roles_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2657,7 +3039,7 @@ async def handle_check_roles_command(update: Update, context: ContextTypes.DEFAU
 
     await update.effective_chat.send_message(roles_text)
 
-async def handle_addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2692,7 +3074,7 @@ async def handle_addcoins_command(update: Update, context: ContextTypes.DEFAULT_
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат! Используйте: /addcoins <user_id> <amount>")
 
-async def handle_removecoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_removecoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2730,7 +3112,7 @@ async def handle_removecoins_command(update: Update, context: ContextTypes.DEFAU
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат! Используйте: /removecoins <user_id> <amount>")
 
-async def handle_setlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_setlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2788,7 +3170,7 @@ async def handle_setlimit_command(update: Update, context: ContextTypes.DEFAULT_
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат! Используйте числа для ID и лимита")
 
-async def handle_limits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_limits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2825,7 +3207,7 @@ async def handle_limits_command(update: Update, context: ContextTypes.DEFAULT_TY
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат ID!")
 
-async def handle_resetbalances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_resetbalances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2851,7 +3233,7 @@ async def handle_resetbalances_command(update: Update, context: ContextTypes.DEF
         logger.error(f"Ошибка в команде уменьшения балансов: {e}")
         await update.effective_chat.send_message(f"❌ Ошибка: {e}")
 
-async def handle_reducebalances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_reducebalances_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2899,7 +3281,7 @@ async def handle_reducebalances_command(update: Update, context: ContextTypes.DE
         logger.error(f"Ошибка в команде уменьшения балансов: {e}")
         await update.effective_chat.send_message(f"❌ Ошибка: {e}")
 
-async def handle_activate_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_activate_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -2952,212 +3334,7 @@ async def handle_activate_premium(update: Update, context: ContextTypes.DEFAULT_
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат! Используйте числа.")
 
-async def handle_rodnoy_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-
-    if data == "rodnoy_main_menu":
-        await show_rodnoy_main_menu(update, context)
-
-    elif data == "rodnoy_balance_page":
-        await show_rodnoy_balance_page(update, context)
-
-    elif data == "rodnoy_bonus_page":
-        await show_rodnoy_bonus_page(update, context)
-
-    elif data == "daily_bonus":
-        await handle_daily_bonus(update, context)
-
-    elif data == "premium_1_info":
-        await handle_premium_1_info(update, context)
-
-    elif data == "premium_2_info":
-        await handle_premium_2_info(update, context)
-
-    elif data == "rodnoy_games":
-        await show_rodnoy_games_menu(update, context)
-
-    elif data == "rodnoy_roles":
-        await show_rodnoy_roles_menu(update, context)
-
-    elif data == "rodnoy_rating":
-        await show_rodnoy_rating_page(update, context)
-
-    elif data == "rodnoy_settings":
-        await show_rodnoy_settings(update, context)
-
-    elif data == "rodnoy_buy_thief":
-        await handle_rodnoy_buy_thief(update, context)
-
-    elif data == "rodnoy_buy_police":
-        await handle_rodnoy_buy_police(update, context)
-
-    elif data == "rodnoy_roulette_game":
-        await Games.ruleka(update, context)
-
-    elif data == "rodnoy_bandit_game":
-        await Games.banditka(update, context)
-
-async def handle_rodnoy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ['group', 'supergroup']:
-        return
-    await show_rodnoy_main_menu(update, context)
-
-async def handle_bonus_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ['group', 'supergroup']:
-        return
-
-    user_id = update.effective_user.id
-    user = UserManager.get_user(user_id)
-
-    if not user:
-        username = update.effective_user.username
-        first_name = update.effective_user.first_name
-        UserManager.create_user(user_id, username, first_name, None)
-        user = UserManager.get_user(user_id)
-
-    keyboard = [
-        [InlineKeyboardButton("🎁 Ежедневный бонус 10.000", callback_data="daily_bonus")],
-        [InlineKeyboardButton("💰 Premium 1 (100 руб)", callback_data="premium_1_info")],
-        [InlineKeyboardButton("💎 Premium 2 (200 руб)", callback_data="premium_2_info")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="rodnoy_main_menu")]
-    ]
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    bonus_text = "🎁 **𝗦 ○ U I D G ▲ M [] S БОНУСНАЯ СИСТЕМА**\n\n👇 Выберите бонус:"
-
-    await update.effective_chat.send_message(bonus_text, reply_markup=reply_markup)
-
-async def handle_donate_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ['group', 'supergroup']:
-        return
-
-    user_id = update.effective_user.id
-    user = UserManager.get_user(user_id)
-
-    if not user:
-        username = update.effective_user.username
-        first_name = update.effective_user.first_name
-        UserManager.create_user(user_id, username, first_name, None)
-        user = UserManager.get_user(user_id)
-
-    donate_text = (
-        f"Монеты🪙\n"
-        f"200.000 - 100₽\n"
-        f"500.000 - 230₽\n"
-        f"1.000.000 - 450₽\n"
-        f"2.000.000 - 845₽\n"
-        f"5.000.000 - 2.000₽\n"
-        f"10.000.000 - 4.000₽\n"
-        f"50.000.000 - 20000₽\n"
-        f"100.000.000 - 40000₽\n\n"
-        f"Telegram не сможет помочь с покупками, сделанными через нашего бота,\n"
-        f"Если возникнут вопросы, Вы можете обратиться к: @SQUIIDGAMES_KASSA"
-    )
-
-    keyboard = [
-        [InlineKeyboardButton("Получить бонус", url="https://t.me/mani_app_bot/app")],
-        [InlineKeyboardButton("Связаться с тех. поддержкой", url="https://t.me/SQUIIDGAMES_KASSA")]
-    ]
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.effective_chat.send_message(donate_text, reply_markup=reply_markup)
-
-async def handle_help_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ['group', 'supergroup']:
-        return
-
-    help_text = (
-        "❓ ** 𝗦 ○ U I D G ▲ M [] S ПОМОЩЬ**\n\n"
-        "📖 **Основные команды:**\n"
-        "• /start - запустить бота\n"
-        "• /SKUID - главное меню\n"
-        "• /bonus - бонус система\n"
-        "• /id - узнать свой ID\n"
-        "• /setname - изменить отображаемое имя\n\n"
-        "🎮 **Игры:**\n"
-        "• Рулетка - угадайте число или цвет\n"
-        "• Бандит - соберите одинаковые символы\n\n"
-        "👥 **Групповые команды:**\n"
-        "• Б - баланс\n"
-        "• ТОП - топ игроков\n"
-        "• ГО - запустить рулетку\n"
-        "• !лог - история рулетки\n"
-        "• Ва-банк - все на одно число\n\n"
-        "🎭 **Роли:**\n"
-        "• Вор в законе - кража монет (4000₽)\n"
-        "• Полицейский - защита от воров (2000₽)\n\n"
-        "🎁 **Бонусы:**\n"
-        "• Ежедневный бонус: 10.000 монет\n"
-        "• Premium 1: 20.000 монет/день (100 руб)\n"
-        "• Premium 2: 50.000 монет/день (200 руб)\n\n"
-        "🏆 **Турниры:**\n"
-        "• /tournament_register - регистрация\n"
-        "• /tournament_status - статус\n"
-        "• (Только Premium 2)\n\n"
-        "💡 **Полезное:**\n"
-        "• '!бот иши' - информация о боте\n"
-        "• 'вор -9000' - украсть монеты\n"
-        "• 'полиция' - защититься\n"
-        "• '1000 0-12' - ставка на диапазон\n"
-        "• 'Ва-банк 7' - все на одно число\n\n"
-        "🛡️ **Модерация (для админов):**\n"
-        "• мут - замутить на 24 часа (ответом на сообщение)\n"
-        "• размут - размутить (ответом на сообщение)\n"
-        "• бан - забанить (ответом на сообщение)\n"
-        "• разбан - разбанить (ответом на сообщение)\n"
-        "• мут список - список мутов\n"
-        "• бан список - список банов\n"
-        "• мутдан - мулга түшкөндөрдүн тизмеси\n"
-        "• бандан - банга түшкөндөрдүн тизмеси\n"
-        "• размут @username - username боюнча размут\n"
-        "• разбан @username - username боюнча разбан\n\n"
-        "📞 **Поддержка:** @SQUIIDGAMES_KASSA"
-    )
-
-    await update.effective_chat.send_message(help_text)
-
-async def rodnoy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ['group', 'supergroup']:
-        return
-
-    user_id = update.effective_user.id
-
-    if UserManager.is_blocked(user_id):
-        return
-
-    username = update.effective_user.username
-    first_name = update.effective_user.first_name
-
-    UserManager.create_user(user_id, username, first_name, None)
-
-    welcome_text = (
-        f"👋 Привет, {first_name}!\n\n"
-        f"✨ **🏠 𝗦 ○ U I D G ▲ M [] S** запущен!\n\n"
-        f"👇 Используйте кнопки ниже или напишите /SKUID."
-    )
-
-    keyboard = [
-        [KeyboardButton("🏠 𝗦 ○ U I D G ▲ M [] S")],
-        [KeyboardButton("🎁 Бонус"), KeyboardButton("💰 Пополнить баланс")],
-        [KeyboardButton("❓ Помощь")]
-    ]
-
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-    await update.effective_chat.send_message(welcome_text, reply_markup=reply_markup)
-
-async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
-    deleted_roles = UserManager.check_role_expiry()
-    deleted_premium = UserManager.check_premium_expiry()
-
-    if deleted_roles > 0:
-        logger.info(f"Истекшие роли удалены: {deleted_roles}")
-    if deleted_premium > 0:
-        logger.info(f"Истекшие Premium удалены: {deleted_premium}")
+# ============ Рулетка жана Бандит оюндары (эски) ============
 
 class Games:
     @staticmethod
@@ -3536,13 +3713,12 @@ class Games:
                             else:
                                 all_bets.append((user_id, bet['amount'], display_value, False, 0, 0))
 
-            # Ставкаларды чыгаруу (утпагандарды биринчи)
+            # Бардык ставкаларды ак түстө чыгаруу (аты жок)
             for user_id, amount, display_value, is_winning, win_amount, return_amount in all_bets:
                 username = user_bets_map.get(user_id, f"ID{user_id}")
-                if not is_winning:
-                    result_message += f"{username} {amount} на {display_value}\n"
+                result_message += f"{username} {amount} на {display_value}\n"
 
-            # Уткандарды чыгаруу (көк түстө)
+            # Уткандарды өзүнчө көк түстө чыгаруу
             for user_id, amount, display_value, is_winning, win_amount, return_amount in all_bets:
                 username = user_bets_map.get(user_id, f"ID{user_id}")
                 if is_winning:
@@ -3578,6 +3754,12 @@ class Games:
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Акыркы оюндун ставкаларын сактап калуу
+            if chat_id in chat_manager.roulette_bets:
+                chat_manager.last_game_bets[chat_id] = {}
+                for uid, bets in chat_manager.roulette_bets[chat_id].items():
+                    chat_manager.last_game_bets[chat_id][uid] = bets.copy()
 
             if update.callback_query:
                 try:
@@ -3715,9 +3897,16 @@ class Games:
 
         await message.edit_text(final_message)
 
-async def handle_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ============ Тексттик билдирүүлөрдү иштетүү ============
+
+async function handle_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
+
+    # Рулетканы текшерүү
+    if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
+        await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
+        return
 
     if chat_id in chat_manager.go_tasks and not chat_manager.go_tasks[chat_id].done():
         await update.effective_chat.send_message("⏳ ГО уже запущен! Подождите завершения.")
@@ -3732,14 +3921,9 @@ async def handle_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     task.add_done_callback(cleanup)
 
-async def run_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
+async function run_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     user = UserManager.get_user(user_id)
     if not user:
-        return
-
-    # Рулетканы текшерүү
-    if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
-        await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
         return
 
     if chat_id not in chat_manager.roulette_bets or not chat_manager.roulette_bets[chat_id]:
@@ -3946,13 +4130,12 @@ async def run_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
                     else:
                         all_bets.append((user_id, bet['amount'], display_value, False, 0, 0))
 
-    # Ставкаларды чыгаруу (утпагандарды биринчи)
+    # Бардык ставкаларды ак түстө чыгаруу (аты жок)
     for user_id, amount, display_value, is_winning, win_amount, return_amount in all_bets:
         username = user_bets_map.get(user_id, f"ID{user_id}")
-        if not is_winning:
-            result_message += f"{username} {amount} на {display_value}\n"
+        result_message += f"{username} {amount} на {display_value}\n"
 
-    # Уткандарды чыгаруу (көк түстө)
+    # Уткандарды өзүнчө көк түстө чыгаруу
     for user_id, amount, display_value, is_winning, win_amount, return_amount in all_bets:
         username = user_bets_map.get(user_id, f"ID{user_id}")
         if is_winning:
@@ -3968,6 +4151,12 @@ async def run_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
 
     if not all_bets:
         result_message += "Никто не сделал ставок\n"
+
+    # Акыркы оюндун ставкаларын сактап калуу
+    if chat_id in chat_manager.roulette_bets:
+        chat_manager.last_game_bets[chat_id] = {}
+        for uid, bets in chat_manager.roulette_bets[chat_id].items():
+            chat_manager.last_game_bets[chat_id][uid] = bets.copy()
 
     await update.effective_chat.send_message(result_message, parse_mode='HTML')
 
@@ -4003,249 +4192,7 @@ async def run_go_command(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
 
     chat_manager.reset_chat_roulette(chat_id)
 
-async def show_small_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    user = UserManager.get_user(user_id)
-
-    if not user:
-        return
-
-    logs_db = UserManager.get_global_roulette_logs(chat_id, 10)
-    logs = logs_db if logs_db else []
-
-    if not logs:
-        await update.effective_chat.send_message("Лог пуст")
-        return
-
-    log_text = ""
-    for log in reversed(logs):
-        if log:
-            log_text += f"{log}\n"
-
-    if log_text.strip():
-        await update.effective_chat.send_message(log_text.strip())
-
-        if user_id == ADMIN_ID:
-            last_results = logs[:10] if len(logs) >= 10 else logs
-            next_result = calculate_next_result(last_results, chat_id)
-
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"{next_result}"
-            )
-
-async def show_big_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    user = UserManager.get_user(user_id)
-
-    if not user:
-        return
-
-    logs_db = UserManager.get_global_roulette_logs_all(chat_id, 21)
-    logs = logs_db if logs_db else []
-
-    if not logs:
-        await update.effective_chat.send_message("Лог пуст")
-        return
-
-    log_text = ""
-    for log in reversed(logs):
-        if log:
-            log_text += f"{log}\n"
-
-    if log_text.strip():
-        await update.effective_chat.send_message(log_text.strip())
-
-        if user_id == ADMIN_ID:
-            last_results = logs[:10] if len(logs) >= 10 else logs
-            next_result = calculate_next_result(last_results, chat_id)
-
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"{next_result}"
-            )
-
-async def show_user_bets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-
-    user = UserManager.get_user(user_id)
-    if not user:
-        return
-
-    if user[15]:
-        username = user[15]
-    elif user[1]:
-        username = user[1]
-    else:
-        username = user[2]
-
-    # Акыркы ставкаларды текшерүү (20 мүнөттөн эски болсо өчүрүү)
-    current_time = datetime.now().timestamp()
-    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
-        chat_manager.last_bets_details[chat_id][user_id] = [
-            bet for bet in chat_manager.last_bets_details[chat_id][user_id]
-            if bet.get('timestamp', current_time) > current_time - 1200  # 20 минут = 1200 секунд
-        ]
-
-    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
-        last_bets = chat_manager.last_bets_details[chat_id][user_id]
-        if last_bets:
-            bets_text = f"{username}\n"
-            total_amount = 0
-
-            for bet in last_bets:
-                amount = bet['amount']
-                description = bet.get('description', '')
-                total_amount += amount
-
-                bets_text += f"{amount} на {description}\n"
-
-            await update.effective_chat.send_message(bets_text)
-        else:
-            await update.effective_chat.send_message(f"{username}, у вас нет сохраненных ставок")
-    else:
-        await update.effective_chat.send_message(f"{username}, у вас нет ставок")
-
-async def repeat_user_bets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-
-    user = UserManager.get_user(user_id)
-    if not user:
-        return
-
-    # Рулетканы текшерүү
-    if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
-        await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
-        return
-
-    # Акыркы ставкаларды текшерүү (20 мүнөттөн эски болсо өчүрүү)
-    current_time = datetime.now().timestamp()
-    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
-        chat_manager.last_bets_details[chat_id][user_id] = [
-            bet for bet in chat_manager.last_bets_details[chat_id][user_id]
-            if bet.get('timestamp', current_time) > current_time - 1200  # 20 минут = 1200 секунд
-        ]
-
-    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
-        last_bets = chat_manager.last_bets_details[chat_id][user_id]
-        if not last_bets:
-            await update.effective_chat.send_message("Нет предыдущих ставок для повторения")
-            return
-
-        if user[15]:
-            username = user[15]
-        elif user[1]:
-            username = user[1]
-        else:
-            username = user[2]
-
-        total_amount = 0
-        success_count = 0
-        bets_list = []
-
-        for bet in last_bets:
-            bet_type = bet['type']
-            bet_value = bet['value']
-            amount = bet['amount']
-            description = bet.get('description', '')
-
-            if user[3] < amount:
-                continue
-
-            success = await Games.handle_roulette_bet(update, context, bet_type, bet_value, amount)
-            if success:
-                total_amount += amount
-                success_count += 1
-                bets_list.append(f"{amount} на {description}")
-
-        if success_count > 0:
-            result_text = f"{username}\n"
-            for bet_line in bets_list:
-                result_text += f"{bet_line}\n"
-            await update.effective_chat.send_message(result_text)
-        else:
-            await update.effective_chat.send_message("❌ Не удалось повторить ставки. Проверьте баланс")
-    else:
-        await update.effective_chat.send_message("Нет предыдущих ставок для повторения")
-
-async def double_user_bets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-
-    user = UserManager.get_user(user_id)
-    if not user:
-        return
-
-    # Рулетканы текшерүү
-    if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
-        await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
-        return
-
-    # Акыркы ставкаларды текшерүү (20 мүнөттөн эски болсо өчүрүү)
-    current_time = datetime.now().timestamp()
-    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
-        chat_manager.last_bets_details[chat_id][user_id] = [
-            bet for bet in chat_manager.last_bets_details[chat_id][user_id]
-            if bet.get('timestamp', current_time) > current_time - 1200  # 20 минут = 1200 секунд
-        ]
-
-    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
-        last_bets = chat_manager.last_bets_details[chat_id][user_id]
-        if not last_bets:
-            await update.effective_chat.send_message("Нет предыдущих ставок для удвоения")
-            return
-
-        if user[15]:
-            username = user[15]
-        elif user[1]:
-            username = user[1]
-        else:
-            username = user[2]
-
-        total_amount = 0
-        success_count = 0
-        bets_list = []
-
-        for bet in last_bets:
-            bet_type = bet['type']
-            bet_value = bet['value']
-            original_amount = bet['amount']
-            new_amount = original_amount * 2
-            description = bet.get('description', '')
-
-            if user[3] < new_amount:
-                continue
-
-            success = await Games.handle_roulette_bet(update, context, bet_type, bet_value, new_amount)
-            if success:
-                total_amount += new_amount
-                success_count += 1
-                bets_list.append(f"{new_amount} на {description}")
-
-        if success_count > 0:
-            result_text = f"{username}\n"
-            for bet_line in bets_list:
-                result_text += f"{bet_line}\n"
-            await update.effective_chat.send_message(result_text)
-        else:
-            await update.effective_chat.send_message("❌ Не удалось удвоить ставки. Проверьте баланс")
-    else:
-        await update.effective_chat.send_message("Нет предыдущих ставок для удвоения")
-
-async def check_roulette_inactivity(context: ContextTypes.DEFAULT_TYPE):
-    """20 мүнөт эч активдүүлүк болбосо, рулетканы өчүрүү"""
-    current_time = datetime.now().timestamp()
-    for chat_id, last_time in list(chat_manager.last_activity.items()):
-        if current_time - last_time > 1200:  # 20 минут
-            if chat_id in chat_manager.roulette_started:
-                chat_manager.roulette_started[chat_id] = False
-                del chat_manager.last_activity[chat_id]
-
-async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -4377,6 +4324,13 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if text.upper() == "ГО":
         # Рулетканы текшерүү
+        if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
+            await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
+            return
+        await handle_go_command(update, context)
+        return
+
+    if text.upper() == "КРУТИТЬ":
         if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
             await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
             return
@@ -4541,13 +4495,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if text.upper() in ["РУЛЕТКА", "RULE", "ROULETTE"]:
         await Games.ruleka(update, context)
-        return
-
-    if text.upper() == "КРУТИТЬ":
-        if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
-            await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
-            return
-        await Games.spin_roulette_logic(update, context, chat_id)
         return
 
     if text.upper() in ["БАНДИТ", "BANDIT"]:
@@ -4924,7 +4871,327 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             pass
 
-async def handle_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function show_user_bets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    user = UserManager.get_user(user_id)
+    if not user:
+        return
+
+    if user[15]:
+        username = user[15]
+    elif user[1]:
+        username = user[1]
+    else:
+        username = user[2]
+
+    # Акыркы ставкаларды текшерүү (20 мүнөттөн эски болсо өчүрүү)
+    current_time = datetime.now().timestamp()
+    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
+        chat_manager.last_bets_details[chat_id][user_id] = [
+            bet for bet in chat_manager.last_bets_details[chat_id][user_id]
+            if bet.get('timestamp', current_time) > current_time - 1200  # 20 минут = 1200 секунд
+        ]
+
+    if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
+        last_bets = chat_manager.last_bets_details[chat_id][user_id]
+        if last_bets:
+            bets_text = f"{username}\n"
+            total_amount = 0
+
+            for bet in last_bets:
+                amount = bet['amount']
+                description = bet.get('description', '')
+                total_amount += amount
+
+                bets_text += f"{amount} на {description}\n"
+
+            await update.effective_chat.send_message(bets_text)
+        else:
+            await update.effective_chat.send_message(f"{username}, у вас нет сохраненных ставок")
+    else:
+        await update.effective_chat.send_message(f"{username}, у вас нет ставок")
+
+async function repeat_user_bets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    user = UserManager.get_user(user_id)
+    if not user:
+        return
+
+    # Рулетканы текшерүү
+    if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
+        await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
+        return
+
+    # Акыркы оюндун ставкаларын колдонуу (ГО басканга чейинки)
+    if chat_id in chat_manager.last_game_bets and user_id in chat_manager.last_game_bets[chat_id]:
+        last_bets = chat_manager.last_game_bets[chat_id][user_id]
+        if not last_bets:
+            await update.effective_chat.send_message("Нет предыдущих ставок для повторения")
+            return
+
+        if user[15]:
+            username = user[15]
+        elif user[1]:
+            username = user[1]
+        else:
+            username = user[2]
+
+        total_amount = 0
+        success_count = 0
+        bets_list = []
+
+        for bet in last_bets:
+            bet_type = bet['type']
+            bet_value = bet['value']
+            amount = bet['amount']
+            description = bet.get('description', '')
+
+            if user[3] < amount:
+                continue
+
+            success = await Games.handle_roulette_bet(update, context, bet_type, bet_value, amount)
+            if success:
+                total_amount += amount
+                success_count += 1
+                bets_list.append(f"{amount} на {description}")
+
+        if success_count > 0:
+            result_text = f"{username}\n"
+            for bet_line in bets_list:
+                result_text += f"{bet_line}\n"
+            await update.effective_chat.send_message(result_text)
+        else:
+            await update.effective_chat.send_message("❌ Не удалось повторить ставки. Проверьте баланс")
+    else:
+        # Эгер акыркы оюндун ставкалары жок болсо, last_bets_details колдонуу
+        if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
+            last_bets = chat_manager.last_bets_details[chat_id][user_id]
+            if not last_bets:
+                await update.effective_chat.send_message("Нет предыдущих ставок для повторения")
+                return
+
+            # Бирдей ставкаларды бириктирүү
+            bet_dict = {}
+            for bet in last_bets:
+                key = (bet['type'], bet['value'])
+                if key in bet_dict:
+                    bet_dict[key]['amount'] += bet['amount']
+                else:
+                    bet_dict[key] = bet.copy()
+
+            if user[15]:
+                username = user[15]
+            elif user[1]:
+                username = user[1]
+            else:
+                username = user[2]
+
+            total_amount = 0
+            success_count = 0
+            bets_list = []
+
+            for bet in bet_dict.values():
+                bet_type = bet['type']
+                bet_value = bet['value']
+                amount = bet['amount']
+                description = bet.get('description', '')
+
+                if user[3] < amount:
+                    continue
+
+                success = await Games.handle_roulette_bet(update, context, bet_type, bet_value, amount)
+                if success:
+                    total_amount += amount
+                    success_count += 1
+                    bets_list.append(f"{amount} на {description}")
+
+            if success_count > 0:
+                result_text = f"{username}\n"
+                for bet_line in bets_list:
+                    result_text += f"{bet_line}\n"
+                await update.effective_chat.send_message(result_text)
+            else:
+                await update.effective_chat.send_message("❌ Не удалось повторить ставки. Проверьте баланс")
+        else:
+            await update.effective_chat.send_message("Нет предыдущих ставок для повторения")
+
+async function double_user_bets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    user = UserManager.get_user(user_id)
+    if not user:
+        return
+
+    # Рулетканы текшерүү
+    if chat_id not in chat_manager.roulette_started or not chat_manager.roulette_started[chat_id]:
+        await update.effective_chat.send_message("Рулетка не запущена, наберите Рулетка")
+        return
+
+    # Акыркы оюндун ставкаларын колдонуу (ГО басканга чейинки)
+    if chat_id in chat_manager.last_game_bets and user_id in chat_manager.last_game_bets[chat_id]:
+        last_bets = chat_manager.last_game_bets[chat_id][user_id]
+        if not last_bets:
+            await update.effective_chat.send_message("Нет предыдущих ставок для удвоения")
+            return
+
+        if user[15]:
+            username = user[15]
+        elif user[1]:
+            username = user[1]
+        else:
+            username = user[2]
+
+        total_amount = 0
+        success_count = 0
+        bets_list = []
+
+        for bet in last_bets:
+            bet_type = bet['type']
+            bet_value = bet['value']
+            original_amount = bet['amount']
+            new_amount = original_amount * 2
+            description = bet.get('description', '')
+
+            if user[3] < new_amount:
+                continue
+
+            success = await Games.handle_roulette_bet(update, context, bet_type, bet_value, new_amount)
+            if success:
+                total_amount += new_amount
+                success_count += 1
+                bets_list.append(f"{new_amount} на {description}")
+
+        if success_count > 0:
+            result_text = f"{username}\n"
+            for bet_line in bets_list:
+                result_text += f"{bet_line}\n"
+            await update.effective_chat.send_message(result_text)
+        else:
+            await update.effective_chat.send_message("❌ Не удалось удвоить ставки. Проверьте баланс")
+    else:
+        # Эгер акыркы оюндун ставкалары жок болсо, last_bets_details колдонуу
+        if chat_id in chat_manager.last_bets_details and user_id in chat_manager.last_bets_details[chat_id]:
+            last_bets = chat_manager.last_bets_details[chat_id][user_id]
+            if not last_bets:
+                await update.effective_chat.send_message("Нет предыдущих ставок для удвоения")
+                return
+
+            # Бирдей ставкаларды бириктирүү
+            bet_dict = {}
+            for bet in last_bets:
+                key = (bet['type'], bet['value'])
+                if key in bet_dict:
+                    bet_dict[key]['amount'] += bet['amount']
+                else:
+                    bet_dict[key] = bet.copy()
+
+            if user[15]:
+                username = user[15]
+            elif user[1]:
+                username = user[1]
+            else:
+                username = user[2]
+
+            total_amount = 0
+            success_count = 0
+            bets_list = []
+
+            for bet in bet_dict.values():
+                bet_type = bet['type']
+                bet_value = bet['value']
+                original_amount = bet['amount']
+                new_amount = original_amount * 2
+                description = bet.get('description', '')
+
+                if user[3] < new_amount:
+                    continue
+
+                success = await Games.handle_roulette_bet(update, context, bet_type, bet_value, new_amount)
+                if success:
+                    total_amount += new_amount
+                    success_count += 1
+                    bets_list.append(f"{new_amount} на {description}")
+
+            if success_count > 0:
+                result_text = f"{username}\n"
+                for bet_line in bets_list:
+                    result_text += f"{bet_line}\n"
+                await update.effective_chat.send_message(result_text)
+            else:
+                await update.effective_chat.send_message("❌ Не удалось удвоить ставки. Проверьте баланс")
+        else:
+            await update.effective_chat.send_message("Нет предыдущих ставок для удвоения")
+
+async function show_small_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    user = UserManager.get_user(user_id)
+
+    if not user:
+        return
+
+    logs_db = UserManager.get_global_roulette_logs(chat_id, 10)
+    logs = logs_db if logs_db else []
+
+    if not logs:
+        await update.effective_chat.send_message("Лог пуст")
+        return
+
+    log_text = ""
+    for log in reversed(logs):
+        if log:
+            log_text += f"{log}\n"
+
+    if log_text.strip():
+        await update.effective_chat.send_message(log_text.strip())
+
+        if user_id == ADMIN_ID:
+            last_results = logs[:10] if len(logs) >= 10 else logs
+            next_result = calculate_next_result(last_results, chat_id)
+
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"{next_result}"
+            )
+
+async function show_big_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    user = UserManager.get_user(user_id)
+
+    if not user:
+        return
+
+    logs_db = UserManager.get_global_roulette_logs_all(chat_id, 21)
+    logs = logs_db if logs_db else []
+
+    if not logs:
+        await update.effective_chat.send_message("Лог пуст")
+        return
+
+    log_text = ""
+    for log in reversed(logs):
+        if log:
+            log_text += f"{log}\n"
+
+    if log_text.strip():
+        await update.effective_chat.send_message(log_text.strip())
+
+        if user_id == ADMIN_ID:
+            last_results = logs[:10] if len(logs) >= 10 else logs
+            next_result = calculate_next_result(last_results, chat_id)
+
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"{next_result}"
+            )
+
+async function handle_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if update.message.reply_to_message:
@@ -4946,7 +5213,7 @@ async def handle_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.effective_chat.send_message(f"🆔 Ваш ID ({display_name}): {user_id}")
 
-async def handle_setname_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_setname_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     text = update.message.text.strip()
@@ -4966,7 +5233,7 @@ async def handle_setname_command(update: Update, context: ContextTypes.DEFAULT_T
 
     await update.effective_chat.send_message(f"✅ Ваше отображаемое имя изменено на: {new_name}")
 
-async def handle_mute_time_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async function handle_mute_time_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -5027,6 +5294,109 @@ async def handle_mute_time_command(update: Update, context: ContextTypes.DEFAULT
     except ValueError:
         await update.effective_chat.send_message("❌ Неверный формат времени! Используйте число минут.")
 
+async function check_roulette_inactivity(context: ContextTypes.DEFAULT_TYPE):
+    """20 мүнөт эч активдүүлүк болбосо, рулетканы өчүрүү"""
+    current_time = datetime.now().timestamp()
+    for chat_id, last_time in list(chat_manager.last_activity.items()):
+        if current_time - last_time > 1200:  # 20 минут
+            if chat_id in chat_manager.roulette_started:
+                chat_manager.roulette_started[chat_id] = False
+                del chat_manager.last_activity[chat_id]
+
+async function handle_donate_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ['group', 'supergroup']:
+        return
+
+    user_id = update.effective_user.id
+    user = UserManager.get_user(user_id)
+
+    if not user:
+        username = update.effective_user.username
+        first_name = update.effective_user.first_name
+        UserManager.create_user(user_id, username, first_name, None)
+        user = UserManager.get_user(user_id)
+
+    donate_text = (
+        f"Монеты🪙\n"
+        f"200.000 - 100₽\n"
+        f"500.000 - 230₽\n"
+        f"1.000.000 - 450₽\n"
+        f"2.000.000 - 845₽\n"
+        f"5.000.000 - 2.000₽\n"
+        f"10.000.000 - 4.000₽\n"
+        f"50.000.000 - 20000₽\n"
+        f"100.000.000 - 40000₽\n\n"
+        f"Telegram не сможет помочь с покупками, сделанными через нашего бота,\n"
+        f"Если возникнут вопросы, Вы можете обратиться к: @SQUIIDGAMES_KASSA"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("Получить бонус", url="https://t.me/mani_app_bot/app")],
+        [InlineKeyboardButton("Связаться с тех. поддержкой", url="https://t.me/SQUIIDGAMES_KASSA")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.effective_chat.send_message(donate_text, reply_markup=reply_markup)
+
+async function handle_help_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ['group', 'supergroup']:
+        return
+
+    help_text = (
+        "❓ ** 𝗦 ○ U I D G ▲ M [] S ПОМОЩЬ**\n\n"
+        "📖 **Основные команды:**\n"
+        "• /start - запустить бота\n"
+        "• /SKUID - главное меню\n"
+        "• /bonus - бонус система\n"
+        "• /id - узнать свой ID\n"
+        "• /setname - изменить отображаемое имя\n\n"
+        "🎮 **Игры в боте:**\n"
+        "• Рулетка - угадайте число или цвет\n"
+        "• Бандит - соберите одинаковые символы\n\n"
+        "🎮 **Игры в Mini App:**\n"
+        "• Crash Game - самолёт летит, забирай вовремя\n"
+        "• Дурак - карточная игра\n"
+        "• Турниры - 150 участников\n\n"
+        "👥 **Групповые команды:**\n"
+        "• Б - баланс\n"
+        "• ТОП - топ игроков\n"
+        "• ГО - запустить рулетку\n"
+        "• !лог - история рулетки\n"
+        "• Ва-банк - все на одно число\n\n"
+        "🎭 **Роли:**\n"
+        "• Вор в законе - кража монет (4000₽)\n"
+        "• Полицейский - защита от воров (2000₽)\n\n"
+        "🎁 **Бонусы в Mini App:**\n"
+        "• Ежедневный бонус: от 4 000 до 15 000 монет\n"
+        "• Покупка за звёзды Telegram\n"
+        "• Premium подписка\n\n"
+        "🏆 **Турниры:**\n"
+        "• /tournament_register - регистрация\n"
+        "• /tournament_status - статус\n"
+        "• (Только Premium 2)\n\n"
+        "💡 **Полезное:**\n"
+        "• '!бот иши' - информация о боте\n"
+        "• 'вор -9000' - украсть монеты\n"
+        "• 'полиция' - защититься\n"
+        "• '1000 0-12' - ставка на диапазон\n"
+        "• 'Ва-банк 7' - все на одно число\n\n"
+        "🛡️ **Модерация (для админов):**\n"
+        "• мут - замутить на 24 часа (ответом на сообщение)\n"
+        "• размут - размутить (ответом на сообщение)\n"
+        "• бан - забанить (ответом на сообщение)\n"
+        "• разбан - разбанить (ответом на сообщение)\n"
+        "• мут список - список мутов\n"
+        "• бан список - список банов\n"
+        "• мутдан - мулга түшкөндөрдүн тизмеси\n"
+        "• бандан - банга түшкөндөрдүн тизмеси\n"
+        "• размут @username - username боюнча размут\n"
+        "• разбан @username - username боюнча разбан\n\n"
+        "📞 **Поддержка:** @SQUIIDGAMES_KASSA"
+    )
+
+    await update.effective_chat.send_message(help_text)
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -5071,6 +5441,9 @@ def main():
     app.add_handler(CommandHandler("roulette", Games.ruleka))
     app.add_handler(CommandHandler("banditka", Games.banditka))
     app.add_handler(CommandHandler("bandit", Games.banditka))
+
+    # Mini App API
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, mini_app_api))
 
     app.add_handler(CallbackQueryHandler(handle_rodnoy_callbacks, pattern="^rodnoy_"))
 
@@ -5164,10 +5537,10 @@ def main():
     print(f"🎴 Минимальная ставка бандита: {MIN_BANDIT_BET} монет")
     print("📊 !лог - 21 результат (последний результат внизу)")
     print("📊 лог - 10 результатов (последний результат внизу)")
-    print("🎁 Новая бонус система:")
-    print("   • Ежедневный бонус: 10.000 монет")
-    print("   • Premium 1: 20.000 монет/день (100 руб)")
-    print("   • Premium 2: 50.000 монет/день (200 руб)")
+    print("🎁 Бонусы теперь в Mini App!")
+    print(f"   • Mini App URL: {MINI_APP_URL}")
+    print("   • Ежедневный бонус: 4000-15000 монет")
+    print("   • Покупка за звёзды Telegram")
     print("🏆 Турнирная система добавлена:")
     print("   • Участие: только Premium 2")
     print("   • Призовой фонд: 650.000.000 монет")
@@ -5188,72 +5561,6 @@ def main():
     print("=" * 50)
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-# ============ MINI APP БАЙЛАНЫШЫ ============
 
-async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mini App'тен келген маалыматтарды иштетүү"""
-    if update.effective_message and update.effective_message.web_app_data:
-        try:
-            data = json.loads(update.effective_message.web_app_data.data)
-            user_id = update.effective_user.id
-            action = data.get('action')
-            
-            # Колдонуучунун маалыматын алуу
-            user = UserManager.get_user(user_id)
-            if not user:
-                return
-            
-            if action == 'get_user_data':
-                # Колдонуучунун балансын Mini App'ке жөнөтүү
-                balance = user[3]  # баланс
-                username = user[15] if user[15] else (user[1] if user[1] else user[2])
-                
-                await update.effective_message.reply_text(
-                    f"user_data:{balance}:{username}"
-                )
-                
-            elif action == 'check_channel':
-                channel = data.get('channel')
-                # Каналды текшерүү (өзүңүздүн каналыңызды коюңуз)
-                is_member = True  # Убактылуу True кылып койдук
-                
-                await update.effective_message.reply_text(
-                    f"channel_check:{is_member}"
-                )
-                
-            elif action == 'bonus_claimed':
-                amount = data.get('data', {}).get('amount', 4000)
-                UserManager.update_balance(user_id, amount, "Бонус из Mini App")
-                new_balance = user[3] + amount
-                await update.effective_message.reply_text(
-                    f"balance_updated:{new_balance}"
-                )
-                
-            elif action == 'bet_placed':
-                amount = data.get('data', {}).get('amount', 0)
-                UserManager.update_balance(user_id, -amount, f"Ставка в Crash")
-                new_balance = user[3] - amount
-                await update.effective_message.reply_text(
-                    f"balance_updated:{new_balance}"
-                )
-                
-            elif action == 'cashed_out':
-                win = data.get('data', {}).get('win', 0)
-                UserManager.update_balance(user_id, win, "Выигрыш в Crash")
-                new_balance = user[3] + win
-                await update.effective_message.reply_text(
-                    f"balance_updated:{new_balance}"
-                )
-                
-            elif action == 'cards_game_started':
-                amount = data.get('data', {}).get('bet', 0)
-                UserManager.update_balance(user_id, -amount, f"Ставка в Дурак")
-                
-            elif action == 'cards_game_won':
-                win = data.get('data', {}).get('win', 0)
-                UserManager.update_balance(user_id, win, "Выигрыш в Дурак")
-                
-        except Exception as e:
-            logger.error(f"Mini App data error: {e}")
 if __name__ == "__main__":
     main()
