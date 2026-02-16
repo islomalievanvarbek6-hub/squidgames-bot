@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>𝗦 ○ U I D G ▲ M [] S</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <div class="app">
+        <!-- Башкы меню -->
+        <div id="main-menu" class="screen active">
+            <div class="header">
+                <h1 class="logo">𝗦 ○ U I D G ▲ M [] S</h1>
+                <div class="balance" id="balance-display">0 🪙</div>
+            </div>
+            
+            <div class="user-info" id="user-info">
+                <span class="user-name">Загрузка...</span>
+                <span class="user-id"></span>
+            </div>
+            
+            <div class="menu-buttons">
+                <button class="menu-btn" onclick="showScreen('games')">
+                    <span class="icon">🎮</span>
+                    <span>Игры</span>
+                </button>
+                <button class="menu-btn" onclick="showScreen('bonus')">
+                    <span class="icon">🎁</span>
+                    <span>Бонусы</span>
+                </button>
+                <button class="menu-btn" onclick="showScreen('tournament')">
+                    <span class="icon">🏆</span>
+                    <span>Турнир</span>
+                </button>
+                <button class="menu-btn" onclick="showScreen('top')">
+                    <span class="icon">📊</span>
+                    <span>Топ</span>
+                </button>
+                <button class="menu-btn" onclick="showScreen('profile')">
+                    <span class="icon">👤</span>
+                    <span>Профиль</span>
+                </button>
+            </div>
+            
+            <div class="footer">
+                <span>@SQUIIDGAMES_BOT</span>
+            </div>
+        </div>
+        
+        <!-- Оюндар менюсу -->
+        <div id="games" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('main-menu')">←</button>
+                <h2>Игры</h2>
+                <div class="balance" id="games-balance">0 🪙</div>
+            </div>
+            
+            <div class="games-grid">
+                <div class="game-card" onclick="showScreen('crash')">
+                    <div class="game-icon">✈️</div>
+                    <div class="game-name">Краш (Самолет)</div>
+                    <div class="game-desc">Угадай момент и забери!</div>
+                </div>
+                
+                <div class="game-card" onclick="showScreen('durak')">
+                    <div class="game-icon">🃏</div>
+                    <div class="game-name">Дурак</div>
+                    <div class="game-desc">Карточная игра</div>
+                </div>
+                
+                <div class="game-card" onclick="window.location.href='https://t.me/SQUIIDGAMES_BOT'">
+                    <div class="game-icon">🎰</div>
+                    <div class="game-name">Рулетка</div>
+                    <div class="game-desc">В боте</div>
+                </div>
+                
+                <div class="game-card" onclick="window.location.href='https://t.me/SQUIIDGAMES_BOT'">
+                    <div class="game-icon">🎴</div>
+                    <div class="game-name">Бандит</div>
+                    <div class="game-desc">В боте</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- КРАШ ОЮНУ (Самолет) -->
+        <div id="crash" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('games')">←</button>
+                <h2>Краш</h2>
+                <div class="balance" id="crash-balance">0 🪙</div>
+            </div>
+            
+            <div class="crash-game">
+                <div class="plane-container">
+                    <div class="plane" id="plane">✈️</div>
+                    <div class="multiplier" id="multiplier">x1.00</div>
+                </div>
+                
+                <div class="status-bar" id="game-status">
+                    Ожидание ставок...
+                </div>
+                
+                <div class="bets-list" id="bets-list">
+                    <h3>Ставки игроков:</h3>
+                    <div id="active-bets"></div>
+                </div>
+                
+                <div class="bet-controls">
+                    <input type="number" id="bet-amount" placeholder="Сумма" min="1000" value="1000">
+                    <button class="btn-primary" id="place-bet-btn" onclick="placeCrashBet()">Сделать ставку</button>
+                    <button class="btn-success" id="cashout-btn" onclick="cashout()" disabled>ЗАБРАТЬ</button>
+                </div>
+                
+                <div class="round-timer" id="round-timer"></div>
+            </div>
+        </div>
+        
+        <!-- ДУРАК ОЮНУ -->
+        <div id="durak" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('games')">←</button>
+                <h2>Дурак</h2>
+                <div class="balance" id="durak-balance">0 🪙</div>
+            </div>
+            
+            <div class="durak-game">
+                <div class="durak-status" id="durak-status">
+                    Поиск игроков...
+                </div>
+                
+                <div class="players-list" id="players-list">
+                    <div class="player-card">
+                        <div class="player-name">Вы</div>
+                        <div class="player-cards">6 карт</div>
+                    </div>
+                </div>
+                
+                <div class="durak-controls">
+                    <button class="btn-primary" onclick="findDurakGame()">Найти игру</button>
+                    <button class="btn-success" onclick="createDurakGame()">Создать игру</button>
+                </div>
+                
+                <div class="cards-container" id="cards-container" style="display: none;">
+                    <!-- Карталар бул жакка JavaScript кошот -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- БОНУС СИСТЕМАСЫ (60 канал) -->
+        <div id="bonus" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('main-menu')">←</button>
+                <h2>Бонусы</h2>
+                <div class="balance" id="bonus-balance">0 🪙</div>
+            </div>
+            
+            <div class="bonus-tiers">
+                <!-- 1-катар: Бекер (20 канал) -->
+                <div class="bonus-tier">
+                    <h3>Бесплатные бонусы</h3>
+                    <div class="bonus-grid" id="free-bonus-grid">
+                        <!-- JavaScript толтурат -->
+                    </div>
+                </div>
+                
+                <!-- 2-катар: Акчалуу 1 (20 канал) -->
+                <div class="bonus-tier">
+                    <h3>Премиум бонусы 20-40к</h3>
+                    <div class="bonus-grid" id="paid1-bonus-grid">
+                        <!-- JavaScript толтурат -->
+                    </div>
+                </div>
+                
+                <!-- 3-катар: Акчалуу 2 (20 канал) -->
+                <div class="bonus-tier">
+                    <h3>VIP бонусы 200к-1М</h3>
+                    <div class="bonus-grid" id="paid2-bonus-grid">
+                        <!-- JavaScript толтурат -->
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bonus-info">
+                <p>Подпишитесь на канал и получите бонус!</p>
+                <p>Каждый канал можно получить 1 раз в день</p>
+            </div>
+        </div>
+        
+        <!-- ТУРНИР -->
+        <div id="tournament" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('main-menu')">←</button>
+                <h2>Турнир</h2>
+                <div class="balance" id="tournament-balance">0 🪙</div>
+            </div>
+            
+            <div class="tournament-info">
+                <div class="tournament-prize">650 000 000 🪙</div>
+                <div class="tournament-status" id="tournament-status">Не активен</div>
+                <div class="tournament-players" id="tournament-players">0/150</div>
+                
+                <button class="btn-primary" onclick="registerTournament()" id="tournament-register-btn">
+                    Зарегистрироваться
+                </button>
+                
+                <div class="tournament-prizes">
+                    <h3>Призовые места:</h3>
+                    <ul>
+                        <li>1 место: 3 месяца Premium</li>
+                        <li>2 место: 100 000 000 🪙</li>
+                        <li>3 место: 90 000 000 🪙</li>
+                        <li>4 место: 80 000 000 🪙</li>
+                        <li>5 место: 70 000 000 🪙</li>
+                        <li>6-10 место: 50 000 000 🪙</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ТОП -->
+        <div id="top" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('main-menu')">←</button>
+                <h2>Топ игроков</h2>
+                <div class="balance" id="top-balance">0 🪙</div>
+            </div>
+            
+            <div class="top-list" id="top-list">
+                <!-- JavaScript толтурат -->
+            </div>
+        </div>
+        
+        <!-- ПРОФИЛЬ -->
+        <div id="profile" class="screen">
+            <div class="header">
+                <button class="back-btn" onclick="showScreen('main-menu')">←</button>
+                <h2>Профиль</h2>
+                <div class="balance" id="profile-balance">0 🪙</div>
+            </div>
+            
+            <div class="profile-info">
+                <div class="profile-avatar">👤</div>
+                <div class="profile-details">
+                    <div class="profile-name" id="profile-name"></div>
+                    <div class="profile-id" id="profile-id"></div>
+                </div>
+            </div>
+            
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-label">Баланс:</span>
+                    <span class="stat-value" id="profile-balance-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Premium:</span>
+                    <span class="stat-value" id="profile-premium">Нет</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Турниры:</span>
+                    <span class="stat-value" id="profile-tournaments">0</span>
+                </div>
+            </div>
+            
+            <div class="profile-actions">
+                <button class="btn-primary" onclick="window.location.href='https://t.me/SQUIIDGAMES_KASSA'">
+                    Пополнить баланс
+                </button>
+                <button class="btn-secondary" onclick="window.location.href='https://t.me/SQUIIDGAMES_BOT'">
+                    Открыть бота
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>

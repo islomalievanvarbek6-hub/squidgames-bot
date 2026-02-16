@@ -1,1 +1,1 @@
-# SQUID GAMES BOT
+# 𝗦 ○ U I D G ▲ M [] S

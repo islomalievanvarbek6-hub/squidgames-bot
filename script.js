@@ -1,207 +1,518 @@
-// Telegram WebApp инициализациясы
-const tg = window.Telegram.WebApp;
+// Telegram Web App инициализация
+let tg = window.Telegram.WebApp;
 tg.expand();
 
-// Глобалдык өзгөрмөләр
 let userId = null;
 let userBalance = 0;
-let userStars = 0;
-let userName = '';
-let premiumType = 0;
+let username = '';
 
-// Краш оюну үчүн өзгөрмөләр
-let crashGameActive = false;
-let crashMultiplier = 1.0;
-let crashBets = {};
-let playerBet = 0;
-let hasCashedOut = false;
+// Краш оюну үчүн өзгөрмөлөр
+let crashActive = false;
+let currentMultiplier = 1.0;
 let crashInterval = null;
+let roundTimer = null;
+let roundTime = 10;
+let userBet = null;
+let cashoutEnabled = false;
+let allBets = [];
 
-// Баштапкы инициализация
+// API дареги
+const API_URL = 'https://islomav4.beget.tech'; // Өзүңдүн домениңди кой
+
+// Башкы функциялар
 document.addEventListener('DOMContentLoaded', function() {
-    initCrashCanvas();
-    loadUserData();
-});
-
-// Колдонуучунун маалыматтарын жүктөө
-function loadUserData() {
-    tg.sendData(JSON.stringify({
-        action: 'get_user'
-    }));
-}
-
-// Telegram'дан келген жоопторду угуу
-tg.onEvent('webAppData', function(data) {
-    try {
-        const response = JSON.parse(data);
-        console.log('Ответ от бота:', response);
+    // Telegramдан колдонуучу маалыматын алуу
+    if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        userId = tg.initDataUnsafe.user.id;
+        username = tg.initDataUnsafe.user.first_name || tg.initDataUnsafe.user.username || 'User';
         
-        if (response.user_id) {
-            userId = response.user_id;
-            userBalance = response.balance;
-            userName = response.display_name || 'Игрок';
-            userStars = response.stars || 0;
-            premiumType = response.premium_type || 0;
-            
-            updateUI();
-            checkDailyBonus();
-        } else if (response.success !== undefined) {
-            handleActionResponse(response);
-        }
-    } catch (e) {
-        console.error('Ошибка обработки данных:', e);
+        loadUserBalance();
+        loadTopUsers();
+        loadTournamentStatus();
+    } else {
+        // Тест үчүн
+        userId = 123456789;
+        username = 'Test User';
+        loadUserBalance();
     }
+    
+    // Балансты 5 секунд сайын жаңыртуу
+    setInterval(loadUserBalance, 5000);
 });
 
-// UI жаңыртуу
-function updateUI() {
-    const balanceElement = document.getElementById('balance');
-    if (balanceElement) {
-        balanceElement.textContent = userBalance.toLocaleString() + ' 🪙';
-    }
+// Балансты жүктөө
+async function loadUserBalance() {
+    if (!userId) return;
     
-    const profileName = document.getElementById('profile-name');
-    if (profileName) {
-        profileName.textContent = userName;
-    }
-    
-    const profileId = document.getElementById('profile-id');
-    if (profileId) {
-        profileId.textContent = 'ID: ' + (userId || '...');
-    }
-}
-
-// Күндүк бонусту текшерүү
-function checkDailyBonus() {
-    tg.sendData(JSON.stringify({
-        action: 'get_daily_bonus'
-    }));
-}
-
-// Күндүк бонусту алуу
-function claimDailyBonus() {
-    const button = document.querySelector('#daily-bonus .bonus-button');
-    if (button) {
-        button.textContent = 'Получение...';
-        button.disabled = true;
-    }
-    
-    tg.sendData(JSON.stringify({
-        action: 'claim_daily_bonus'
-    }));
-}
-
-// Жылдызча менен сатып алуу
-function buyWithStars() {
-    const select = document.getElementById('stars-amount');
-    if (!select) return;
-    
-    const starsAmount = parseInt(select.value);
-    const coinAmount = starsAmount * 500;
-    
-    tg.sendData(JSON.stringify({
-        action: 'buy_with_stars',
-        stars: starsAmount,
-        coins: coinAmount
-    }));
-}
-
-// Тариф сатып алуу
-function buyTariff(stars, coins) {
-    if (userStars < stars) {
-        showNotification('Недостаточно звёзд!', 'error');
-        return;
-    }
-    
-    tg.sendData(JSON.stringify({
-        action: 'buy_with_stars',
-        stars: stars,
-        coins: coins
-    }));
-}
-
-// Жоопторду иштетүү
-function handleActionResponse(response) {
-    if (response.success) {
-        if (response.bonus) {
-            userBalance += response.bonus;
-            updateUI();
-            showNotification('Бонус получен: +' + response.bonus + ' 🪙', 'success');
-            
-            const button = document.querySelector('#daily-bonus .bonus-button');
-            if (button) {
-                button.textContent = 'Получено';
-                button.disabled = true;
-            }
-        } else if (response.coins) {
-            userBalance += response.coins;
-            updateUI();
-            showNotification('Покупка успешна: +' + response.coins + ' 🪙', 'success');
+    try {
+        const response = await fetch(`${API_URL}/api/get_balance/${userId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            userBalance = data.balance;
+            updateAllBalances();
         }
-    } else {
-        if (response.error === 'Already claimed') {
-            showNotification('Вы уже получили бонус сегодня!', 'error');
-            const button = document.querySelector('#daily-bonus .bonus-button');
-            if (button) {
-                button.textContent = 'Уже получено';
-                button.disabled = true;
+    } catch (error) {
+        console.error('Баланс жүктөөдө ката:', error);
+    }
+}
+
+// Бардык жерлерде балансты жаңыртуу
+function updateAllBalances() {
+    const balanceElements = document.querySelectorAll('.balance');
+    balanceElements.forEach(el => {
+        el.textContent = `${userBalance.toLocaleString()} 🪙`;
+    });
+}
+
+// Экрандарды өзгөртүү
+function showScreen(screenId) {
+    document.querySelectorAll('.screen').forEach(screen => {
+        screen.classList.remove('active');
+    });
+    document.getElementById(screenId).classList.add('active');
+    
+    // Экранга жараша маалыматтарды жүктөө
+    if (screenId === 'bonus') {
+        loadBonusGrid();
+    } else if (screenId === 'top') {
+        loadTopUsers();
+    } else if (screenId === 'tournament') {
+        loadTournamentStatus();
+    } else if (screenId === 'profile') {
+        loadProfile();
+    } else if (screenId === 'crash') {
+        initCrashGame();
+    }
+}
+
+// Бонус системасы (60 канал)
+function loadBonusGrid() {
+    // 1-катар: Бекер (20 канал)
+    const freeGrid = document.getElementById('free-bonus-grid');
+    freeGrid.innerHTML = '';
+    
+    for (let i = 0; i < 20; i++) {
+        const channel = document.createElement('div');
+        channel.className = 'bonus-channel free';
+        channel.innerHTML = `
+            <div class="channel-icon">📢</div>
+            <div class="channel-name">Канал ${i+1}</div>
+            <div class="bonus-amount">6k-20k</div>
+        `;
+        channel.onclick = () => claimBonus('free', i);
+        freeGrid.appendChild(channel);
+    }
+    
+    // 2-катар: Акчалуу 1 (20 канал)
+    const paid1Grid = document.getElementById('paid1-bonus-grid');
+    paid1Grid.innerHTML = '';
+    
+    for (let i = 0; i < 20; i++) {
+        const channel = document.createElement('div');
+        channel.className = 'bonus-channel paid1';
+        channel.innerHTML = `
+            <div class="channel-icon">💎</div>
+            <div class="channel-name">VIP ${i+1}</div>
+            <div class="bonus-amount">20k-40k</div>
+        `;
+        channel.onclick = () => claimBonus('paid1', i);
+        paid1Grid.appendChild(channel);
+    }
+    
+    // 3-катар: Акчалуу 2 (20 канал)
+    const paid2Grid = document.getElementById('paid2-bonus-grid');
+    paid2Grid.innerHTML = '';
+    
+    for (let i = 0; i < 20; i++) {
+        const channel = document.createElement('div');
+        channel.className = 'bonus-channel paid2';
+        channel.innerHTML = `
+            <div class="channel-icon">👑</div>
+            <div class="channel-name">ULTRA ${i+1}</div>
+            <div class="bonus-amount">200k-1M</div>
+        `;
+        channel.onclick = () => claimBonus('paid2', i);
+        paid2Grid.appendChild(channel);
+    }
+    
+    // localStorage'дан алынгандарды белгилөө
+    loadClaimedChannels();
+}
+
+// Каналга подписка жана бонус алуу
+async function claimBonus(type, index) {
+    const channelLink = 'https://t.me/hbjkhboygg'; // Бардык каналдар бир эле ссылка
+    
+    // Каналды ачуу
+    window.open(channelLink, '_blank');
+    
+    // Колдонуучу подписка болгонун текшерүү (5 секунд күтөбүз)
+    setTimeout(async () => {
+        try {
+            const response = await fetch(`${API_URL}/api/add_bonus`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    type: type,
+                    channel_index: index
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                userBalance = data.new_balance;
+                updateAllBalances();
+                
+                // Бул каналды бүткөн деп белгилөө
+                markChannelClaimed(type, index);
+                
+                tg.showAlert(`🎁 Вы получили ${data.amount.toLocaleString()} 🪙!`);
+            } else {
+                tg.showAlert('❌ Ошибка получения бонуса');
             }
+        } catch (error) {
+            console.error('Бонус алууда ката:', error);
+            tg.showAlert('❌ Ошибка соединения');
+        }
+    }, 5000);
+}
+
+// Бүткөн каналдарды белгилөө
+function markChannelClaimed(type, index) {
+    let claimed = JSON.parse(localStorage.getItem(`bonus_${userId}`) || '{}');
+    if (!claimed[type]) claimed[type] = [];
+    claimed[type].push(index);
+    localStorage.setItem(`bonus_${userId}`, JSON.stringify(claimed));
+    
+    // UI'да белгилөө
+    loadClaimedChannels();
+}
+
+function loadClaimedChannels() {
+    const claimed = JSON.parse(localStorage.getItem(`bonus_${userId}`) || '{}');
+    
+    document.querySelectorAll('.bonus-channel').forEach((channel, i) => {
+        channel.classList.remove('completed');
+    });
+    
+    if (claimed.free) {
+        claimed.free.forEach(index => {
+            const channels = document.querySelectorAll('.bonus-channel.free');
+            if (channels[index]) channels[index].classList.add('completed');
+        });
+    }
+    
+    if (claimed.paid1) {
+        claimed.paid1.forEach(index => {
+            const channels = document.querySelectorAll('.bonus-channel.paid1');
+            if (channels[index]) channels[index].classList.add('completed');
+        });
+    }
+    
+    if (claimed.paid2) {
+        claimed.paid2.forEach(index => {
+            const channels = document.querySelectorAll('.bonus-channel.paid2');
+            if (channels[index]) channels[index].classList.add('completed');
+        });
+    }
+}
+
+// Топ 10 колдонуучуну жүктөө
+async function loadTopUsers() {
+    try {
+        const response = await fetch(`${API_URL}/api/get_top_users`);
+        const data = await response.json();
+        
+        if (data.success) {
+            const topList = document.getElementById('top-list');
+            topList.innerHTML = '';
+            
+            data.users.forEach((user, index) => {
+                const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index+1}`;
+                
+                const item = document.createElement('div');
+                item.className = 'top-item';
+                item.innerHTML = `
+                    <div class="top-position">${medal}</div>
+                    <div class="top-user">${user.name}</div>
+                    <div class="top-balance">${user.balance.toLocaleString()} 🪙</div>
+                `;
+                topList.appendChild(item);
+            });
+        }
+    } catch (error) {
+        console.error('Топ жүктөөдө ката:', error);
+    }
+}
+
+// Турнир статусун жүктөө
+async function loadTournamentStatus() {
+    try {
+        const response = await fetch(`${API_URL}/api/get_tournament_registrations`);
+        const data = await response.json();
+        
+        if (data.success) {
+            document.getElementById('tournament-players').textContent = `${data.count}/150`;
+            
+            // Premium текшерүү
+            const premiumResponse = await fetch(`${API_URL}/api/get_user_premium?user_id=${userId}`);
+            const premiumData = await premiumResponse.json();
+            
+            if (premiumData.success && premiumData.premium_type >= 2) {
+                document.getElementById('tournament-register-btn').disabled = false;
+            } else {
+                document.getElementById('tournament-register-btn').disabled = true;
+                document.getElementById('tournament-register-btn').textContent = 'Требуется Premium 2';
+            }
+        }
+    } catch (error) {
+        console.error('Турнир статусун жүктөөдө ката:', error);
+    }
+}
+
+// Турнирге катталуу
+async function registerTournament() {
+    try {
+        const response = await fetch(`${API_URL}/api/register_tournament`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, username: username })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            tg.showAlert('✅ Вы зарегистрированы на турнир!');
+            loadTournamentStatus();
         } else {
-            showNotification('Ошибка: ' + response.error, 'error');
-            
-            const button = document.querySelector('#daily-bonus .bonus-button');
-            if (button) {
-                button.textContent = 'Получить';
-                button.disabled = false;
-            }
+            tg.showAlert('❌ ' + data.message);
         }
+    } catch (error) {
+        console.error('Катталууда ката:', error);
+        tg.showAlert('❌ Ошибка соединения');
     }
 }
 
-// Билдирүү көрсөтүү
-function showNotification(message, type) {
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.textContent = message;
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: ${type === 'success' ? '#4caf50' : '#f44336'};
-        color: white;
-        padding: 15px 30px;
-        border-radius: 50px;
-        font-weight: bold;
-        z-index: 1000;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-    `;
+// Профиль жүктөө
+async function loadProfile() {
+    try {
+        const response = await fetch(`${API_URL}/api/get_user_info/${userId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            const user = data.user;
+            
+            document.getElementById('profile-name').textContent = user.display_name || user.username || user.first_name;
+            document.getElementById('profile-id').textContent = `ID: ${user.id}`;
+            document.getElementById('profile-balance-value').textContent = user.balance.toLocaleString();
+            document.getElementById('profile-tournaments').textContent = user.tournament_wins;
+            
+            if (user.premium_type > 0) {
+                document.getElementById('profile-premium').textContent = `Premium ${user.premium_type}`;
+            } else {
+                document.getElementById('profile-premium').textContent = 'Нет';
+            }
+        }
+    } catch (error) {
+        console.error('Профиль жүктөөдө ката:', error);
+    }
+}
+
+// КРАШ ОЮНУ (Самолет)
+function initCrashGame() {
+    // Эски интервалдарды тазалоо
+    if (crashInterval) clearInterval(crashInterval);
+    if (roundTimer) clearInterval(roundTimer);
     
-    document.body.appendChild(notification);
+    crashActive = false;
+    currentMultiplier = 1.0;
+    cashoutEnabled = false;
+    userBet = null;
+    allBets = [];
     
+    document.getElementById('multiplier').textContent = 'x1.00';
+    document.getElementById('game-status').textContent = 'Ожидание ставок...';
+    document.getElementById('cashout-btn').disabled = true;
+    document.getElementById('place-bet-btn').disabled = false;
+    document.getElementById('bet-amount').disabled = false;
+    
+    // Жасалма ставкалар (тест үчүн)
+    allBets = [
+        { user: 'Игрок1', amount: 1000, multiplier: 1.5 },
+        { user: 'Игрок2', amount: 2000, multiplier: 2.3 },
+        { user: 'Игрок3', amount: 500, multiplier: 3.1 }
+    ];
+    
+    updateBetsList();
+    
+    // Раундду баштоо
+    startRoundTimer();
+}
+
+function startRoundTimer() {
+    roundTime = 10;
+    document.getElementById('round-timer').textContent = `Следующий раунд через: ${roundTime}с`;
+    
+    roundTimer = setInterval(() => {
+        roundTime--;
+        document.getElementById('round-timer').textContent = `Следующий раунд через: ${roundTime}с`;
+        
+        if (roundTime <= 0) {
+            clearInterval(roundTimer);
+            startCrashRound();
+        }
+    }, 1000);
+}
+
+function startCrashRound() {
+    crashActive = true;
+    currentMultiplier = 1.0;
+    document.getElementById('game-status').textContent = 'Самолет летит!';
+    document.getElementById('cashout-btn').disabled = false;
+    
+    // Ставка коюуну өчүрүү
+    document.getElementById('place-bet-btn').disabled = true;
+    document.getElementById('bet-amount').disabled = true;
+    
+    // Мультипликаторду өстүрүү
+    crashInterval = setInterval(() => {
+        if (!crashActive) return;
+        
+        // Мультипликаторду өстүрүү (кокус сан)
+        currentMultiplier += 0.1;
+        document.getElementById('multiplier').textContent = `x${currentMultiplier.toFixed(2)}`;
+        
+        // Кокус жарылуу (30% мүмкүнчүлүк)
+        if (Math.random() < 0.03) {
+            crash();
+        }
+    }, 500);
+}
+
+function crash() {
+    crashActive = false;
+    clearInterval(crashInterval);
+    
+    document.getElementById('game-status').textContent = '💥 САМОЛЕТ ВЗОРВАЛСЯ!';
+    document.getElementById('cashout-btn').disabled = true;
+    
+    // Уттургандарды эсептөө
+    allBets.forEach(bet => {
+        if (!bet.cashedOut && bet.user === username) {
+            // Уттурду
+            updateBalance(-bet.amount, 'Проигрыш в краш');
+        }
+    });
+    
+    // 10 секунддан кийин кайра баштоо
     setTimeout(() => {
-        notification.remove();
-    }, 3000);
+        startRoundTimer();
+    }, 10000);
 }
 
-// Краш оюнунун канвасын инициализациялоо
-function initCrashCanvas() {
-    const canvas = document.getElementById('crashCanvas');
-    if (!canvas) return;
+function placeCrashBet() {
+    if (!crashActive && roundTime > 0) {
+        const amount = parseInt(document.getElementById('bet-amount').value);
+        
+        if (amount < 1000) {
+            tg.showAlert('❌ Минимальная ставка: 1000 монет!');
+            return;
+        }
+        
+        if (amount > userBalance) {
+            tg.showAlert('❌ Недостаточно монет!');
+            return;
+        }
+        
+        userBet = {
+            user: username,
+            amount: amount,
+            multiplier: 0,
+            cashedOut: false
+        };
+        
+        allBets.push(userBet);
+        updateBetsList();
+        
+        // Балансты убактылуу азайтуу
+        userBalance -= amount;
+        updateAllBalances();
+        
+        tg.showAlert(`✅ Ставка ${amount} принята!`);
+    } else {
+        tg.showAlert('❌ Сейчас нельзя делать ставку!');
+    }
+}
+
+function cashout() {
+    if (crashActive && userBet && !userBet.cashedOut) {
+        const winAmount = Math.floor(userBet.amount * currentMultiplier);
+        
+        userBet.cashedOut = true;
+        userBet.multiplier = currentMultiplier;
+        
+        // Утушту кошуу
+        userBalance += winAmount;
+        updateAllBalances();
+        updateBalance(winAmount, 'Выигрыш в краш');
+        
+        updateBetsList();
+        
+        tg.showAlert(`✅ Вы выиграли ${winAmount.toLocaleString()} 🪙! (x${currentMultiplier.toFixed(2)})`);
+    }
+}
+
+function updateBetsList() {
+    const betsDiv = document.getElementById('active-bets');
+    betsDiv.innerHTML = '';
     
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#87CEEB';
-    ctx.fillRect(0, 0, canvas.width, 150);
-    ctx.fillStyle = '#FFE4B5';
-    ctx.fillRect(0, 150, canvas.width, 150);
+    allBets.forEach(bet => {
+        const betItem = document.createElement('div');
+        betItem.className = 'bet-item';
+        
+        let status = '';
+        if (bet.cashedOut) {
+            status = `✅ x${bet.multiplier.toFixed(2)}`;
+        } else if (!crashActive) {
+            status = '⏳';
+        } else {
+            status = `x${currentMultiplier.toFixed(2)}`;
+        }
+        
+        betItem.innerHTML = `
+            <span class="user">${bet.user}</span>
+            <span class="amount">${bet.amount.toLocaleString()} 🪙</span>
+            <span class="multiplier">${status}</span>
+        `;
+        betsDiv.appendChild(betItem);
+    });
 }
 
-// Играларды көрсөтүү
-function showGame(game) {
-    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.game-container').forEach(container => container.classList.remove('active'));
-    
-    event.target.classList.add('active');
-    document.getElementById(game + '-game').classList.add('active');
+// Балансты серверге жаңыртуу
+async function updateBalance(amount, description) {
+    try {
+        await fetch(`${API_URL}/api/update_balance`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: userId,
+                amount: amount,
+                description: description
+            })
+        });
+    } catch (error) {
+        console.error('Баланс жаңыртууда ката:', error);
+    }
 }
 
+// ДУРАК ОЮНУ (тесттик версия)
+function findDurakGame() {
+    tg.showAlert('🔍 Поиск игры... (скоро)');
+}
+
+function createDurakGame() {
+    tg.showAlert('🎮 Создание игры... (скоро)');
+}
