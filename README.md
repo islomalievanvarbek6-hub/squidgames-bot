@@ -1,1 +1,1 @@
-# 𝗦 ○ U I D G ▲ M [] S Умардын боту
+# 𝗦 ○ U I D G ▲ M [] S Umar UMARDku
